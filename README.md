@@ -16,6 +16,7 @@
 | 2. 新增人员注册（名称、ID、类型 HUMAN/AGENT、所在部门，注册后生成工号） | `POST /api/v1/persons` |
 | 3. 查看部门信息及下属人员列表 | `GET /api/v1/departments/{id}` |
 | 4. 查看人员信息 | `GET /api/v1/persons/{id}`（支持人员 ID 或工号） |
+| 5. 部门重命名（保留部门 ID、类型与下属人员） | `PATCH /api/v1/departments/{id}` |
 
 ## 快速开始
 
@@ -56,6 +57,12 @@ curl -s localhost:8080/api/v1/departments/D0001
 # 4) 查看人员信息（人员 ID 或工号均可）
 curl -s localhost:8080/api/v1/persons/user-001
 curl -s localhost:8080/api/v1/persons/E0001
+
+# 5) 部门重命名（只改名称，ID / 类型 / 下属人员保持不变）
+curl -s -X PATCH localhost:8080/api/v1/departments/D0001 \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"平台研发部"}'
+# => {"id":"D0001","name":"平台研发部","type":"研发","createdAt":"..."}
 ```
 
 ## Web UI（浏览器界面）
@@ -73,6 +80,7 @@ http://localhost:8080/          # 单页界面
 - 概览统计：部门数、人员总数、HUMAN / AGENT 分布。
 - 新增部门（名称 + 类型）与人员注册（名称 / 人员 ID / 类型 / 所在部门）。
 - 部门列表（含成员数，点击可展开部门详情抽屉查看成员）与人员列表（按姓名 / 人员 ID / 工号搜索，按部门筛选）。
+- 部门重命名：列表中每行的「重命名」按钮（或详情抽屉里的同名按钮）弹出对话框，改完后两个列表与抽屉自动刷新。
 
 路由约定：
 
@@ -119,6 +127,7 @@ make run SERVICE_PORT=9000                             # 同上，走 Makefile
 | `POST` | `/api/v1/departments` | 新增部门 |
 | `GET` | `/api/v1/departments` | 部门列表（附带可选类型枚举 `types`） |
 | `GET` | `/api/v1/departments/{id}` | 部门详情，含 `members` 下属人员列表 |
+| `PATCH` | `/api/v1/departments/{id}` | 部门重命名（仅改名称，保留 ID/类型/成员） |
 | `POST` | `/api/v1/persons` | 人员注册，返回分配的工号 |
 | `GET` | `/api/v1/persons` | 人员列表，支持 `?departmentId=D0001` 过滤 |
 | `GET` | `/api/v1/persons/{id}` | 人员详情，`{id}` 可为人员 ID 或工号 |
@@ -131,6 +140,15 @@ make run SERVICE_PORT=9000                             # 同上，走 Makefile
 | --- | --- | --- |
 | `name` | 是 | 部门名称，1–64 字符，全局唯一（忽略大小写与首尾空白） |
 | `type` | 是 | 部门类型：`研发` / `测试` / `产品` / `管理`，也接受 `rd`、`dev`、`qa`、`test`、`product`、`pm`、`mgmt`、`admin` 等别名 |
+
+`PATCH /api/v1/departments/{id}`
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `name` | 是 | 新部门名称，校验与唯一性规则同创建（1–64 字符，忽略大小写与首尾空白，不能与其他部门重名） |
+
+> 重命名只改 `name`：`id`、`type`、`createdAt` 与下属人员都不变，因此外部持有的部门 ID 始终有效；
+> 重命名为自己当前的名字（含大小写/空白差异）视为幂等成功，不报冲突。
 
 `POST /api/v1/persons`
 
@@ -253,6 +271,6 @@ make package     # 产出发版包 outputs/（等价于 ./build.sh）
 换 pid、`stop.sh` 幂等（未运行返回 0）、陈旧 pid 文件自动清理、缺二进制或端口
 被占用时返回 1 并打印日志尾部、失败后清理 pid 文件。
 
-覆盖：部门创建（4 种类型 + 别名、校验、重名冲突）、人员注册（工号分配、类型校验、部门存在性、ID 冲突）、部门详情含成员列表、人员查询（按 ID / 按工号）、列表按部门过滤、HTTP 全链路与错误状态码映射。
+覆盖：部门创建（4 种类型 + 别名、校验、重名冲突）、部门重命名（保留 ID/类型/成员、名称索引重建、重名冲突、幂等自改、校验与不存在）、人员注册（工号分配、类型校验、部门存在性、ID 冲突）、部门详情含成员列表、人员查询（按 ID / 按工号）、列表按部门过滤、HTTP 全链路与错误状态码映射。
 
 
