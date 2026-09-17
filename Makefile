@@ -1,12 +1,17 @@
 GO ?= go
+BIN_NAME ?= orgd
 PORT ?= 8080
 
-.PHONY: all build run demo test test-race cover fmt vet tidy clean
+.PHONY: all build package run demo test test-race cover fmt vet tidy clean
 
 all: fmt vet test
 
 build:
-	$(GO) build -o bin/server ./cmd/server
+	$(GO) build -o bin/$(BIN_NAME) ./cmd/server
+
+# 发版包：产出 outputs/（部署系统 release.sh 会调用 ./build.sh，这里是对等入口）
+package:
+	./build.sh
 
 run:
 	$(GO) run ./cmd/server
@@ -34,4 +39,4 @@ tidy:
 	$(GO) mod tidy
 
 clean:
-	rm -rf bin coverage.out
+	rm -rf bin outputs coverage.out

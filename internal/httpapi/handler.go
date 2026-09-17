@@ -15,23 +15,41 @@ import (
 const (
 	basePath     = "/api/v1"
 	maxBodyBytes = 1 << 20 // 1 MiB
+	// serviceName is reported by the health endpoint.
+	serviceName = "organization"
 )
 
 // Handler serves the organization API.
 type Handler struct {
-	svc *org.Service
-	log *slog.Logger
+	svc     *org.Service
+	log     *slog.Logger
+	version string
+}
+
+// Option customizes the handler.
+type Option func(*Handler)
+
+// WithVersion sets the version reported by the health endpoint (deployment
+// injects APP_VERSION; the build may also bake it in via -ldflags).
+func WithVersion(v string) Option {
+	return func(h *Handler) { h.version = v }
 }
 
 // New builds the HTTP handler for the organization API. A nil logger falls
 // back to slog.Default().
-func New(svc *org.Service, logger *slog.Logger) http.Handler {
+func New(svc *org.Service, logger *slog.Logger, opts ...Option) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	h := &Handler{svc: svc, log: logger}
+	h := &Handler{svc: svc, log: logger, version: "dev"}
+	for _, opt := range opts {
+		opt(h)
+	}
 
 	mux := http.NewServeMux()
+	// /health is the deployment platform's uniform probe path; /healthz is kept
+	// as an alias for the platform-independent convention.
+	mux.HandleFunc("GET /health", h.health)
 	mux.HandleFunc("GET /healthz", h.health)
 	mux.HandleFunc("GET "+basePath+"/departments", h.listDepartments)
 	mux.HandleFunc("POST "+basePath+"/departments", h.createDepartment)
@@ -44,7 +62,11 @@ func New(svc *org.Service, logger *slog.Logger) http.Handler {
 }
 
 func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "ok",
+		"service": serviceName,
+		"version": h.version,
+	})
 }
 
 // createDepartment handles POST /api/v1/departments.

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,9 +16,25 @@ import (
 	"github.com/kaulie/organization/internal/org"
 )
 
+// version is the build version. The release build injects the deployment hash
+// via -ldflags "-X main.version=<hash>"; at runtime APP_VERSION (injected by
+// the deployment control plane) wins, which keeps a manually started process
+// consistent with the deployed package.
+var version = "dev"
+
+// resolveVersion prefers the APP_VERSION injected by the deployment platform.
+func resolveVersion() string {
+	if v := strings.TrimSpace(os.Getenv("APP_VERSION")); v != "" {
+		return v
+	}
+	return version
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
+
+	appVersion := resolveVersion()
 
 	addr := os.Getenv("ORG_ADDR")
 	if addr == "" {
@@ -31,7 +48,7 @@ func main() {
 	service := org.NewService(org.NewMemoryStore())
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.New(service, logger),
+		Handler:           httpapi.New(service, logger, httpapi.WithVersion(appVersion)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -42,7 +59,7 @@ func main() {
 	defer stop()
 
 	go func() {
-		logger.Info("server_starting", "addr", addr)
+		logger.Info("server_starting", "addr", addr, "version", appVersion)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("server_error", "err", err)
 			stop()
@@ -50,7 +67,7 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	logger.Info("server_shutting_down")
+	logger.Info("server_shutting_down", "version", appVersion)
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
