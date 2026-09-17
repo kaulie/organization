@@ -19,7 +19,7 @@
 ## 快速开始
 
 ```bash
-make run                 # 默认监听 :8080，可用 PORT 或 ORG_ADDR 覆盖
+make run                 # 默认监听 :8080，可用 PORT / ORG_ADDR 覆盖（见「环境变量」）
 # 或者
 go run ./cmd/server
 ```
@@ -56,6 +56,28 @@ curl -s localhost:8080/api/v1/departments/D0001
 curl -s localhost:8080/api/v1/persons/user-001
 curl -s localhost:8080/api/v1/persons/E0001
 ```
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PORT` | `8080` | 监听端口。只设置它时监听 `:PORT`（所有网卡） |
+| `ORG_ADDR` | — | 完整监听地址，如 `127.0.0.1:4250`。**优先级高于 `PORT`** |
+| `ORG_BIND` | `127.0.0.1` | 仅由 `scripts/start.sh` 使用：决定绑定哪张网卡，最终地址为 `${ORG_BIND}:${PORT}` |
+| `APP_VERSION` | `dev` | 版本号，出现在 `/health` 响应与启动/关闭日志中；发版时由平台注入，二进制内以 `-ldflags` 兜底 |
+| `ORG_DATA_DIR` | `backend/data` | 数据目录（按部署标准预留；当前为内存存储，尚未使用） |
+
+优先级：**`ORG_ADDR` > `PORT` > 内置默认 `8080`**。
+
+```bash
+PORT=9000 go run ./cmd/server                     # 监听 :9000（所有网卡）
+ORG_ADDR=127.0.0.1:9000 go run ./cmd/server       # 只监听本机 9000（覆盖 PORT）
+```
+
+部署环境下无需手工设置：控制面把服务契约 `healthUrl` 的端口注入 `PORT`，
+`scripts/start.sh` 统一导出 `ORG_ADDR="${ORG_BIND:-127.0.0.1}:${PORT}"`，
+因此端口始终跟随契约，并默认只绑本机回环。若端口被占用，进程会以
+`bind: address already in use` 退出，`start.sh` 会据此返回 1 并打印日志尾部。
 
 ## API 参考
 
