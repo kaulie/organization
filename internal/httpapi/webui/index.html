@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>组织架构管理</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f6df6'/%3E%3Ctext x='16' y='22' font-size='16' font-family='sans-serif' fill='white' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">ORG</span>
+      <div>
+        <h1>组织架构管理</h1>
+        <p class="subtitle">部门维护 · HUMAN / AGENT 人员注册与查询</p>
+      </div>
+    </div>
+    <div class="status">
+      <span id="health-pill" class="pill pill-warn">连接中…</span>
+      <span class="version">版本 <code id="service-version">—</code></span>
+    </div>
+  </header>
+
+  <section class="stats">
+    <article class="stat">
+      <span class="stat-label">部门</span>
+      <strong class="stat-value" id="stat-departments">0</strong>
+      <span class="stat-hint" id="stat-department-types">—</span>
+    </article>
+    <article class="stat">
+      <span class="stat-label">人员总数</span>
+      <strong class="stat-value" id="stat-persons">0</strong>
+      <span class="stat-hint" id="stat-persons-hint">—</span>
+    </article>
+    <article class="stat">
+      <span class="stat-label">HUMAN</span>
+      <strong class="stat-value" id="stat-humans">0</strong>
+      <span class="stat-hint">人类员工</span>
+    </article>
+    <article class="stat">
+      <span class="stat-label">AGENT</span>
+      <strong class="stat-value" id="stat-agents">0</strong>
+      <span class="stat-hint">智能体</span>
+    </article>
+  </section>
+
+  <main class="layout">
+    <div class="column">
+      <section class="panel" id="panel-departments">
+        <div class="panel-head">
+          <h2>新增部门</h2>
+          <button type="button" class="ghost" id="refresh-departments">刷新</button>
+        </div>
+
+        <form id="department-form" class="form" autocomplete="off">
+          <div class="field">
+            <label for="department-name">部门名称</label>
+            <input id="department-name" name="name" type="text" maxlength="64" placeholder="例如：研发中心" required>
+          </div>
+          <div class="field">
+            <label for="department-type">部门类型</label>
+            <select id="department-type" name="type" required></select>
+          </div>
+          <button type="submit" class="primary">新增部门</button>
+        </form>
+      </section>
+
+      <section class="panel" id="panel-persons">
+        <div class="panel-head">
+          <h2>人员注册</h2>
+          <button type="button" class="ghost" id="refresh-persons">刷新</button>
+        </div>
+
+        <form id="person-form" class="form" autocomplete="off">
+          <div class="field">
+            <label for="person-name">姓名 / 名称</label>
+            <input id="person-name" name="name" type="text" maxlength="64" placeholder="例如：Alice 或 Cline" required>
+          </div>
+          <div class="field">
+            <label for="person-id">人员 ID</label>
+            <input id="person-id" name="id" type="text" maxlength="64" placeholder="例如：user-001 / agent-001" required>
+          </div>
+          <div class="field">
+            <label for="person-type">类型</label>
+            <select id="person-type" name="type" required></select>
+          </div>
+          <div class="field">
+            <label for="person-department">所在部门</label>
+            <select id="person-department" name="departmentId" required></select>
+          </div>
+          <button type="submit" class="primary">注册人员</button>
+        </form>
+
+        <p class="hint">注册成功后由系统分配工号（<code>E0001</code> 起）。</p>
+      </section>
+    </div>
+
+
+    <div class="column">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>部门列表</h2>
+          <span class="count" id="department-count">0 个</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>ID</th><th>名称</th><th>类型</th><th>人员</th><th>创建时间</th><th></th></tr>
+            </thead>
+            <tbody id="department-rows"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="department-empty" hidden>还没有部门，先在左侧新增一个。</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>人员列表</h2>
+          <span class="count" id="person-count">0 人</span>
+        </div>
+        <div class="filters">
+          <input id="person-search" type="search" placeholder="按姓名 / 人员 ID / 工号搜索">
+          <select id="person-filter"><option value="">全部部门</option></select>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>工号</th><th>姓名</th><th>人员 ID</th><th>类型</th><th>部门</th><th>注册时间</th></tr>
+            </thead>
+            <tbody id="person-rows"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="person-empty" hidden>暂无人员记录。</p>
+      </section>
+    </div>
+  </main>
+
+  <div class="drawer" id="department-drawer" hidden>
+    <div class="drawer-backdrop" data-close-drawer></div>
+    <aside class="drawer-body" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+      <header class="drawer-head">
+        <div>
+          <h3 id="drawer-title">部门详情</h3>
+          <p class="drawer-meta" id="drawer-meta"></p>
+        </div>
+        <button type="button" class="ghost" data-close-drawer>关闭</button>
+      </header>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>工号</th><th>姓名</th><th>人员 ID</th><th>类型</th><th>注册时间</th></tr>
+          </thead>
+          <tbody id="drawer-rows"></tbody>
+        </table>
+      </div>
+      <p class="empty" id="drawer-empty" hidden>该部门暂无人员。</p>
+    </aside>
+  </div>
+
+  <footer class="footer">
+    <span>JSON API 与 UI 同源：<code>/api/v1/*</code> · UI 资源 <code>/ui/*</code></span>
+    <span>数据保存在进程内存中，服务重启后清空。</span>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="/ui/app.js"></script>
+</body>
