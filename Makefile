@@ -1,6 +1,6 @@
 GO ?= go
 BIN_NAME ?= orgd
-PORT ?= 8080
+SERVICE_PORT ?= 8080
 
 .PHONY: all build package run demo test test-race cover fmt vet tidy clean
 
@@ -14,7 +14,7 @@ package:
 	./build.sh
 
 run:
-	$(GO) run ./cmd/server
+	SERVICE_PORT=$(SERVICE_PORT) $(GO) run ./cmd/server
 
 demo: build
 	./examples/demo.sh

@@ -22,6 +22,9 @@ import (
 // consistent with the deployed package.
 var version = "dev"
 
+// defaultListenPort is used when neither ORG_ADDR nor SERVICE_PORT is set.
+const defaultListenPort = "8080"
+
 // resolveVersion prefers the APP_VERSION injected by the deployment platform.
 func resolveVersion() string {
 	if v := strings.TrimSpace(os.Getenv("APP_VERSION")); v != "" {
@@ -30,20 +33,33 @@ func resolveVersion() string {
 	return version
 }
 
+// listenAddr resolves the listen address from the environment.
+//
+// Precedence: ORG_ADDR > SERVICE_PORT > defaultListenPort. Setting only
+// SERVICE_PORT listens on all interfaces; ORG_ADDR also pins the interface.
+//
+// The port variable is deliberately named SERVICE_PORT instead of the generic
+// PORT: PORT is routinely exported by unrelated runtimes sharing the host
+// (e.g. a co-located web app), which would silently relocate this listener.
+// scripts/start.sh bridges the port injected by the deployment control plane
+// (it injects PORT, per the platform contract) into ORG_ADDR/SERVICE_PORT.
+func listenAddr() string {
+	if addr := strings.TrimSpace(os.Getenv("ORG_ADDR")); addr != "" {
+		return addr
+	}
+	port := strings.TrimSpace(os.Getenv("SERVICE_PORT"))
+	if port == "" {
+		port = defaultListenPort
+	}
+	return ":" + port
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
 	appVersion := resolveVersion()
-
-	addr := os.Getenv("ORG_ADDR")
-	if addr == "" {
-		port := os.Getenv("PORT")
-		if port == "" {
-			port = "8080"
-		}
-		addr = ":" + port
-	}
+	addr := listenAddr()
 
 	service := org.NewService(org.NewMemoryStore())
 	server := &http.Server{
