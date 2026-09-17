@@ -12,7 +12,7 @@
 #   bin/orgd                可执行文件（来自发版包）
 #   scripts/*.sh            本目录（来自发版包）
 #   backend/.env            可选项覆盖（首次启动自动生成，权限 600）
-#   backend/data/           数据目录（当前存储为内存实现，重启不保留数据）
+#   backend/data/           数据目录（org-store.json 持久化于此，跨发布保留）
 #   backend/runtime.pid     进程号
 #   backend/server.log      标准输出/错误
 set -euo pipefail
@@ -45,7 +45,7 @@ if [ ! -f "${ENV_FILE}" ]; then
 # organization 运行期配置（首次启动自动生成，权限 600，请勿提交到 git）
 # 监听地址由 start.sh 按平台端口推导（127.0.0.1:PORT），如需换网卡再打开下面一行：
 # ORG_BIND=127.0.0.1
-# 数据目录（当前实现为内存存储，进程重启后数据清空）：
+# 数据目录（持久化 JSON 文件 org-store.json 所在目录；发布时该目录会被保留）：
 # ORG_DATA_DIR=${DATA_DIR}
 EOF
   chmod 600 "${ENV_FILE}"

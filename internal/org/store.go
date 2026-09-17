@@ -3,6 +3,7 @@ package org
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,7 +51,11 @@ type memoryStore struct {
 }
 
 // NewMemoryStore returns an empty in-memory store.
-func NewMemoryStore() Store {
+func NewMemoryStore() Store { return newMemoryStore() }
+
+// newMemoryStore returns the concrete in-memory store. It is shared with the
+// file backed store, which embeds it to reuse the locking and uniqueness logic.
+func newMemoryStore() *memoryStore {
 	return &memoryStore{
 		departments:     make(map[string]*Department),
 		departmentNames: make(map[string]string),
@@ -182,6 +187,82 @@ func (s *memoryStore) GetPersonByEmployeeNo(employeeNo string) (*Person, bool) {
 	}
 	copied := *person
 	return &copied, true
+}
+
+// numericSuffix parses the numeric part of a generated id (D0007 -> 7). It
+// returns 0 for anything that does not look like prefix followed by digits.
+func numericSuffix(id, prefix string) int {
+	if !strings.HasPrefix(id, prefix) {
+		return 0
+	}
+	n, err := strconv.Atoi(id[len(prefix):])
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// snapshot returns a deep copy of the whole store. It is the unit of
+// persistence for the file backed store.
+func (s *memoryStore) snapshot() storeFile {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	state := storeFile{
+		Version:     storeFileVersion,
+		Departments: make([]Department, 0, len(s.departments)),
+		Persons:     make([]Person, 0, len(s.persons)),
+		DeptSeq:     s.deptSeq,
+		EmpSeq:      s.empSeq,
+	}
+	for _, dept := range s.departments {
+		state.Departments = append(state.Departments, *dept)
+	}
+	sort.Slice(state.Departments, func(i, j int) bool { return state.Departments[i].ID < state.Departments[j].ID })
+	for _, person := range s.persons {
+		state.Persons = append(state.Persons, *person)
+	}
+	sort.Slice(state.Persons, func(i, j int) bool { return state.Persons[i].EmployeeNo < state.Persons[j].EmployeeNo })
+	return state
+}
+
+// load replaces the store contents with a snapshot. Sequence counters are
+// clamped to the highest id present in the snapshot, so a truncated or
+// hand-edited file can never hand out an id that is already in use.
+func (s *memoryStore) load(state storeFile) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.departments = make(map[string]*Department, len(state.Departments))
+	s.departmentNames = make(map[string]string, len(state.Departments))
+	s.persons = make(map[string]*Person, len(state.Persons))
+	s.employeeNos = make(map[string]*Person, len(state.Persons))
+
+	s.deptSeq = 0
+	for _, dept := range state.Departments {
+		restored := dept
+		s.departments[restored.ID] = &restored
+		s.departmentNames[normalizeKey(restored.Name)] = restored.ID
+		if n := numericSuffix(restored.ID, departmentIDPrefix); n > s.deptSeq {
+			s.deptSeq = n
+		}
+	}
+	if state.DeptSeq > s.deptSeq {
+		s.deptSeq = state.DeptSeq
+	}
+
+	s.empSeq = 0
+	for _, person := range state.Persons {
+		restored := person
+		s.persons[restored.ID] = &restored
+		s.employeeNos[restored.EmployeeNo] = &restored
+		if n := numericSuffix(restored.EmployeeNo, employeeNoPrefix); n > s.empSeq {
+			s.empSeq = n
+		}
+	}
+	if state.EmpSeq > s.empSeq {
+		s.empSeq = state.EmpSeq
+	}
 }
 
 // ListPersons returns the members of a department. An empty departmentID

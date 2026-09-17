@@ -11,6 +11,10 @@
 # Test binary, built with `go test -c`
 *.test
 
+# Runtime state (local runs of the service write its JSON data file here; the
+# deployed copy lives under ~/runtime/<project>/backend/ and is not in the repo)
+backend/
+
 # Build output
 bin/
 outputs/
