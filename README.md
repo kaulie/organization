@@ -19,7 +19,7 @@
 ## 快速开始
 
 ```bash
-make run                 # 默认监听 :8080，可用 PORT / ORG_ADDR 覆盖（见「环境变量」）
+make run                 # 默认监听 :8080，可用 SERVICE_PORT / ORG_ADDR 覆盖（见「环境变量」）
 # 或者
 go run ./cmd/server
 ```
@@ -61,23 +61,27 @@ curl -s localhost:8080/api/v1/persons/E0001
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `PORT` | `8080` | 监听端口。只设置它时监听 `:PORT`（所有网卡） |
-| `ORG_ADDR` | — | 完整监听地址，如 `127.0.0.1:4250`。**优先级高于 `PORT`** |
-| `ORG_BIND` | `127.0.0.1` | 仅由 `scripts/start.sh` 使用：决定绑定哪张网卡，最终地址为 `${ORG_BIND}:${PORT}` |
+| `SERVICE_PORT` | `8080` | 监听端口。只设置它时监听 `:SERVICE_PORT`（所有网卡） |
+| `ORG_ADDR` | — | 完整监听地址，如 `127.0.0.1:4250`。**优先级高于 `SERVICE_PORT`** |
+| `ORG_BIND` | `127.0.0.1` | 仅由 `scripts/start.sh` 使用：决定绑定哪张网卡，最终地址为 `${ORG_BIND}:${SERVICE_PORT}` |
 | `APP_VERSION` | `dev` | 版本号，出现在 `/health` 响应与启动/关闭日志中；发版时由平台注入，二进制内以 `-ldflags` 兜底 |
 | `ORG_DATA_DIR` | `backend/data` | 数据目录（按部署标准预留；当前为内存存储，尚未使用） |
 
-优先级：**`ORG_ADDR` > `PORT` > 内置默认 `8080`**。
+优先级：**`ORG_ADDR` > `SERVICE_PORT` > 内置默认 `8080`**。
 
 ```bash
-PORT=9000 go run ./cmd/server                     # 监听 :9000（所有网卡）
-ORG_ADDR=127.0.0.1:9000 go run ./cmd/server       # 只监听本机 9000（覆盖 PORT）
+SERVICE_PORT=9000 go run ./cmd/server                  # 监听 :9000（所有网卡）
+ORG_ADDR=127.0.0.1:9000 go run ./cmd/server            # 只监听本机 9000（覆盖 SERVICE_PORT）
+make run SERVICE_PORT=9000                             # 同上，走 Makefile
 ```
 
-部署环境下无需手工设置：控制面把服务契约 `healthUrl` 的端口注入 `PORT`，
-`scripts/start.sh` 统一导出 `ORG_ADDR="${ORG_BIND:-127.0.0.1}:${PORT}"`，
-因此端口始终跟随契约，并默认只绑本机回环。若端口被占用，进程会以
-`bind: address already in use` 退出，`start.sh` 会据此返回 1 并打印日志尾部。
+> **为什么不用通用的 `PORT`？** 同一台主机上往往已有别的运行时导出了 `PORT`
+> （本机实测 `PORT=4211` 来自共存的 web-cursor 部署），直接继承会让本服务被顶到
+> 别人的端口上、形成难查的串扰。因此服务只认 `SERVICE_PORT`/`ORG_ADDR`。
+> 部署链路由 `scripts/start.sh` 显式桥接：控制面按服务契约 `healthUrl` 注入 `PORT`，
+> 脚本再映射为 `SERVICE_PORT` 与 `ORG_ADDR="${ORG_BIND:-127.0.0.1}:${SERVICE_PORT}"`，
+> 端口始终跟随契约，并默认只绑本机回环。若端口被占用，进程会以
+> `bind: address already in use` 退出，`start.sh` 据此返回 1 并打印日志尾部。
 
 ## API 参考
 
@@ -187,13 +191,13 @@ scripts/restart.sh          重启（stop + start，平台 restartCmd）
 
 | 变量 | 含义 |
 | --- | --- |
-| `PORT` | 服务契约 `healthUrl` 的端口，脚本据此绑定 `127.0.0.1:${PORT}`（本服务默认 `4250`） |
+| `PORT` | 服务契约 `healthUrl` 的端口（平台统一通用名）。脚本把它映射为 `SERVICE_PORT`，并绑定 `127.0.0.1:${SERVICE_PORT}`（默认 `4250`） |
 | `RUNTIME_DIR` | runtime 根目录 |
 | `APP_VERSION` | 本次部署的 8 位短 hash |
 
 `start.sh` 的行为：缺失二进制直接报错退出；首次启动生成 `backend/.env`；
 已在运行则跳过（幂等）；`nohup` 拉起后写 `backend/runtime.pid`；轮询
-`http://127.0.0.1:${PORT}/health` 最多 20s，成功才返回 0，失败则打印日志尾部、
+`http://127.0.0.1:${SERVICE_PORT}/health` 最多 20s，成功才返回 0，失败则打印日志尾部、
 清理 pid 文件并返回 1。`stop.sh` 在未运行时返回 0（幂等），确保 `deploy.sh`
 的重启链路不会因为空跑而失败。
 

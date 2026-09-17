@@ -3,8 +3,8 @@
 # exercises every requirement, then shuts the server down.
 set -euo pipefail
 
-PORT="${PORT:-18080}"
-BASE="http://127.0.0.1:${PORT}"
+SERVICE_PORT="${SERVICE_PORT:-18080}"
+BASE="http://127.0.0.1:${SERVICE_PORT}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$(mktemp -d)/org-server"
 
@@ -20,11 +20,11 @@ echo "==> building server"
 (cd "${ROOT}" && go build -o "${BIN}" ./cmd/server)
 
 echo "==> starting server on ${BASE}"
-PORT="${PORT}" "${BIN}" >/dev/null 2>&1 &
+SERVICE_PORT="${SERVICE_PORT}" "${BIN}" >/dev/null 2>&1 &
 SERVER_PID=$!
 
 for _ in $(seq 1 50); do
-  if curl -sf "${BASE}/healthz" >/dev/null 2>&1; then break; fi
+  if curl -sf "${BASE}/health" >/dev/null 2>&1; then break; fi
   sleep 0.1
 done
 

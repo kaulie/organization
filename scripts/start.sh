@@ -3,7 +3,8 @@
 # 启动 organization —— 遵循部署系统规范的 runtime 脚本。
 #
 # 由控制面以 restartCmd 调用：cwd = runtimeDir，且注入
-#   PORT        = 服务契约 healthUrl 里的端口（本脚本据此绑定监听地址）
+#   PORT        = 服务契约 healthUrl 里的端口（平台统一通用名；本脚本映射为
+#                 SERVICE_PORT —— 服务自身只认 SERVICE_PORT/ORG_ADDR，见下方说明）
 #   RUNTIME_DIR = runtimeDir
 #   APP_VERSION = 本次部署的 8 位短 hash
 #
@@ -18,7 +19,8 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="${RUNTIME_DIR:-$(cd "${DIR}/.." && pwd)}"
-PORT="${PORT:-4250}"
+# 平台按服务契约注入的端口：先固化，避免后面 source backend/.env 时被覆盖。
+PLATFORM_PORT="${PORT:-4250}"
 APP_VERSION="${APP_VERSION:-dev}"
 
 BIN="${RUNTIME_DIR}/bin/orgd"
@@ -27,7 +29,6 @@ ENV_FILE="${BACKEND}/.env"
 DATA_DIR="${BACKEND}/data"
 PID_FILE="${BACKEND}/runtime.pid"
 LOG_FILE="${BACKEND}/server.log"
-HEALTH_URL="http://127.0.0.1:${PORT}/health"
 
 log() { echo "[start] $*"; }
 die() { echo "[start][错误] $*" >&2; exit 1; }
@@ -42,7 +43,7 @@ if [ ! -f "${ENV_FILE}" ]; then
   umask 077
   cat > "${ENV_FILE}" <<EOF
 # organization 运行期配置（首次启动自动生成，权限 600，请勿提交到 git）
-# 监听地址由 start.sh 按 PORT 推导（127.0.0.1:PORT），如需换网卡再打开下面一行：
+# 监听地址由 start.sh 按平台端口推导（127.0.0.1:PORT），如需换网卡再打开下面一行：
 # ORG_BIND=127.0.0.1
 # 数据目录（当前实现为内存存储，进程重启后数据清空）：
 # ORG_DATA_DIR=${DATA_DIR}
@@ -55,9 +56,16 @@ fi
 set -a; . "${ENV_FILE}"; set +a
 
 # 平台注入的值优先：端口永远跟随服务契约的 healthUrl。
-export ORG_ADDR="${ORG_BIND:-127.0.0.1}:${PORT}"
+# 服务自身读 SERVICE_PORT（刻意不用通用名 PORT：同主机其它运行时会导出 PORT，
+# 例如 web-cursor 的 4211，直接继承会把本服务顶到别人的端口上），
+# 这里把平台注入的 PORT 显式映射为 SERVICE_PORT。
+export SERVICE_PORT="${PLATFORM_PORT}"
+export ORG_ADDR="${ORG_BIND:-127.0.0.1}:${SERVICE_PORT}"
 export ORG_DATA_DIR="${ORG_DATA_DIR:-${DATA_DIR}}"
 export APP_VERSION
+
+# 探活：/health 是平台对每个服务统一探的路径。
+HEALTH_URL="http://127.0.0.1:${SERVICE_PORT}/health"
 
 # 已在运行则不重复拉起（平台重启前都会先 stop，这里是防御性检查）。
 if [ -f "${PID_FILE}" ]; then
