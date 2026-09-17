@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/kaulie/organization/internal/org"
@@ -246,5 +247,71 @@ func TestErrorStatusMapping(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("malformed JSON status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// The browser UI is embedded in the binary and served from "/" plus "/ui/*".
+// This guards the mount contract the single page depends on: the assets must be
+// reachable under the /ui/ prefix (StripPrefix), not at the FS root.
+func TestUIEndpoints(t *testing.T) {
+	srv := newTestServer(t)
+
+	// GET / renders the single page and references the assets it needs.
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("get /: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET / status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("GET / content-type = %q, want text/html", ct)
+	}
+	page, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /: %v", err)
+	}
+	for _, asset := range []string{"/ui/styles.css", "/ui/app.js"} {
+		if !bytes.Contains(page, []byte(asset)) {
+			t.Errorf("index page does not reference %s", asset)
+		}
+	}
+
+	// Every asset referenced by the page must be served, not 404.
+	for _, asset := range []string{"/ui/styles.css", "/ui/app.js"} {
+		resp, err := http.Get(srv.URL + asset)
+		if err != nil {
+			t.Fatalf("get %s: %v", asset, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("read %s: %v", asset, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200", asset, resp.StatusCode)
+		}
+		if len(bytes.TrimSpace(body)) == 0 {
+			t.Errorf("GET %s returned an empty body", asset)
+		}
+	}
+
+	// The UI mount must not shadow the API.
+	if status, _ := doJSON(t, http.MethodGet, srv.URL+"/api/v1/departments", nil); status != http.StatusOK {
+		t.Errorf("GET /api/v1/departments status = %d, want 200", status)
+	}
+	// POST / stays 405 (exact match), so the UI cannot swallow API verbs.
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/", bytes.NewBufferString("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Errorf("POST / status = %d, want non-200", resp.StatusCode)
 	}
 }

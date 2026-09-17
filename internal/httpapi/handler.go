@@ -58,6 +58,10 @@ func New(svc *org.Service, logger *slog.Logger, opts ...Option) http.Handler {
 	mux.HandleFunc("POST "+basePath+"/persons", h.registerPerson)
 	mux.HandleFunc("GET "+basePath+"/persons/{id}", h.getPerson)
 
+	// Browser UI (embedded single page + assets). "/" is exact-matched so it
+	// cannot shadow the API routes above.
+	mountUI(mux)
+
 	return h.recoverPanic(h.logRequests(mux))
 }
 

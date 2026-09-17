@@ -6,6 +6,7 @@
 
 - 语言/运行时：Go 1.24（仅使用标准库，无第三方依赖）
 - 形态：HTTP + JSON 服务，内存存储（进程重启后数据清空）
+- 界面：内置单页 Web UI（`embed` 进二进制，打开 `/` 即用，见「Web UI（浏览器界面）」）
 
 ## 功能与需求对应
 
@@ -56,6 +57,32 @@ curl -s localhost:8080/api/v1/departments/D0001
 curl -s localhost:8080/api/v1/persons/user-001
 curl -s localhost:8080/api/v1/persons/E0001
 ```
+
+## Web UI（浏览器界面）
+
+服务内置一个单页界面（Go `embed` 打进二进制，无第三方依赖、无单独前端构建步骤），
+浏览器打开根路径即可使用：
+
+```
+http://localhost:8080/          # 单页界面
+```
+
+界面能力（全部通过同源 JSON API `/api/v1/*` 读写）：
+
+- 顶部状态条：探活 `/health` 并显示当前部署版本。
+- 概览统计：部门数、人员总数、HUMAN / AGENT 分布。
+- 新增部门（名称 + 类型）与人员注册（名称 / 人员 ID / 类型 / 所在部门）。
+- 部门列表（含成员数，点击可展开部门详情抽屉查看成员）与人员列表（按姓名 / 人员 ID / 工号搜索，按部门筛选）。
+
+路由约定：
+
+| 路径 | 说明 |
+| --- | --- |
+| `/` | 单页界面（精确匹配，不会遮蔽 API 路由） |
+| `/ui/*` | 界面静态资源（`styles.css`、`app.js`） |
+
+> 因为界面资源嵌在二进制里，部署平台只分发 `bin/orgd` + `scripts/` 也能正常渲染，
+> 不依赖可执行文件旁边的任何前端文件。
 
 ## 环境变量
 
@@ -139,6 +166,7 @@ build.sh            发版构建（产出 outputs/，供部署平台 release.sh 
 scripts/            标准启停脚本（start/stop/restart，见“部署与启停”）
 cmd/server          HTTP 服务入口（配置、优雅退出）
 internal/httpapi    传输层：路由、JSON 编解码、错误到 HTTP 状态码的映射
+internal/httpapi/webui  内置单页界面（go:embed，经 /ui/* 提供静态资源）
 internal/org        领域层：模型与校验、业务用例 Service、存储 Store
 ```
 
