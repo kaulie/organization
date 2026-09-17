@@ -36,6 +36,11 @@
   }
 
   let toastTimer = null;
+  // Department currently shown in the detail drawer (null when closed): used to
+  // refresh the drawer's title after a rename.
+  let drawerDepartmentId = null;
+  // Department targeted by the rename dialog (null when closed).
+  let renameDepartmentId = null;
   function toast(message, kind = 'ok') {
     const node = $('toast');
     node.textContent = message;
@@ -115,7 +120,10 @@
         <td><span class="tag tag-type">${esc(dept.type)}</span></td>
         <td class="num">${members === undefined ? '—' : members}</td>
         <td>${formatTime(dept.createdAt)}</td>
-        <td><button type="button" class="ghost" data-department="${esc(dept.id)}">详情</button></td>
+        <td class="row-actions">
+          <button type="button" class="ghost" data-rename="${esc(dept.id)}">重命名</button>
+          <button type="button" class="ghost" data-department="${esc(dept.id)}">详情</button>
+        </td>
       </tr>`;
     }).join('');
   }
@@ -154,6 +162,7 @@
   }
 
   function closeDrawer() {
+    drawerDepartmentId = null;
     $('department-drawer').hidden = true;
   }
 
@@ -161,6 +170,7 @@
   async function openDepartment(id) {
     try {
       const detail = await api(`/departments/${encodeURIComponent(id)}`);
+      drawerDepartmentId = detail.id;
       $('drawer-title').textContent = detail.name;
       $('drawer-meta').innerHTML =
         `<code>${esc(detail.id)}</code> · <span class="tag tag-type">${esc(detail.type)}</span>` +
@@ -172,6 +182,68 @@
       $('department-drawer').hidden = false;
     } catch (err) {
       toast(`读取部门失败：${err.message}`, 'err');
+    }
+  }
+
+  /* ---------------- rename dialog ---------------- */
+
+  // openRename pops the rename dialog for a department, prefilled with its
+  // current name. Renaming only touches the name: id, type and members stay.
+  function openRename(id) {
+    const dept = state.departments.find((d) => d.id === id);
+    if (!dept) return;
+    renameDepartmentId = dept.id;
+    $('rename-target').innerHTML =
+      `目标：<code>${esc(dept.id)}</code> · 当前名称「${esc(dept.name)}」`;
+    const input = $('rename-name');
+    input.value = dept.name;
+    const dialog = $('rename-dialog');
+    if (typeof dialog.showModal === 'function') {
+      if (!dialog.open) dialog.showModal();
+    } else {
+      dialog.hidden = false; // very old browsers: fall back to a plain block
+    }
+    input.focus();
+    input.select();
+  }
+
+  function closeRename() {
+    renameDepartmentId = null;
+    const dialog = $('rename-dialog');
+    if (dialog.open) {
+      dialog.close();
+    } else {
+      dialog.hidden = true;
+    }
+  }
+
+  async function submitRename(event) {
+    event.preventDefault();
+    if (!renameDepartmentId) return;
+
+    const button = event.target.querySelector('button[type="submit"]');
+    const targetID = renameDepartmentId;
+    const name = $('rename-name').value.trim();
+    if (!name) {
+      toast('部门名称不能为空', 'err');
+      return;
+    }
+
+    try {
+      const updated = await withPending(button, () => api(`/departments/${encodeURIComponent(targetID)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      }));
+      closeRename();
+      toast(`部门已重命名为 ${updated.name}`);
+      // Reload both lists: the persons table renders each member's
+      // departmentName, which the rename just changed.
+      await loadDepartments();
+      await loadPersons();
+      if (drawerDepartmentId === targetID) await openDepartment(targetID);
+    } catch (err) {
+      toast(`重命名失败：${err.message}`, 'err');
     }
   }
 
@@ -305,15 +377,32 @@
     $('person-filter').addEventListener('change', renderPersons);
 
     // Department detail: the name link and the "详情" button carry the same hook.
+    // The 重命名 button sits in the same row, so it is checked first.
     $('department-rows').addEventListener('click', (event) => {
+      const rename = event.target.closest('[data-rename]');
+      if (rename) {
+        openRename(rename.dataset.rename);
+        return;
+      }
       const trigger = event.target.closest('[data-department]');
       if (trigger) openDepartment(trigger.dataset.department);
+    });
+    $('rename-form').addEventListener('submit', submitRename);
+    $('rename-cancel').addEventListener('click', closeRename);
+    $('drawer-rename').addEventListener('click', () => {
+      if (drawerDepartmentId) openRename(drawerDepartmentId);
     });
     document.querySelectorAll('[data-close-drawer]').forEach((node) => {
       node.addEventListener('click', closeDrawer);
     });
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') closeDrawer();
+      if (event.key !== 'Escape') return;
+      // 先关闭最上层的重命名对话框，再关闭抽屉。
+      if (renameDepartmentId) {
+        closeRename();
+        return;
+      }
+      closeDrawer();
     });
   }
 

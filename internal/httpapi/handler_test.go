@@ -315,3 +315,112 @@ func TestUIEndpoints(t *testing.T) {
 		t.Errorf("POST / status = %d, want non-200", resp.StatusCode)
 	}
 }
+
+// Renaming must be reachable from the browser UI, not only from curl: the page
+// ships the rename dialog and app.js drives it through PATCH /departments/{id}.
+func TestUIEmbedsRenameControls(t *testing.T) {
+	srv := newTestServer(t)
+
+	fetch := func(path string) []byte {
+		t.Helper()
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatalf("get %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200", path, resp.StatusCode)
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		return body
+	}
+
+	page := fetch("/")
+	for _, needle := range []string{`id="rename-dialog"`, `id="rename-name"`, `id="drawer-rename"`} {
+		if !bytes.Contains(page, []byte(needle)) {
+			t.Errorf("index page does not expose %s", needle)
+		}
+	}
+
+	script := fetch("/ui/app.js")
+	for _, needle := range []string{"method: 'PATCH'", "data-rename", "openRename"} {
+		if !bytes.Contains(script, []byte(needle)) {
+			t.Errorf("app.js does not drive the rename flow (%s missing)", needle)
+		}
+	}
+}
+
+// PATCH /api/v1/departments/{id} renames a department in place: the id, type and
+// members are preserved, and the new name is subject to the same uniqueness
+// rules as creation.
+func TestRenameDepartmentEndpoint(t *testing.T) {
+	srv := newTestServer(t)
+
+	_, dept := doJSON(t, http.MethodPost, srv.URL+"/api/v1/departments",
+		map[string]string{"name": "研发中心", "type": "研发"})
+	deptID, _ := dept["id"].(string)
+	if deptID == "" {
+		t.Fatalf("department id missing: %v", dept)
+	}
+	if status, person := doJSON(t, http.MethodPost, srv.URL+"/api/v1/persons",
+		map[string]string{"name": "Alice", "id": "user-001", "type": "human", "departmentId": deptID}); status != http.StatusCreated {
+		t.Fatalf("register person status = %d (%v), want 201", status, person)
+	}
+
+	// rename + verify the response shape
+	status, renamed := doJSON(t, http.MethodPatch, srv.URL+"/api/v1/departments/"+deptID,
+		map[string]string{"name": "平台研发部"})
+	if status != http.StatusOK {
+		t.Fatalf("rename status = %d (%v), want 200", status, renamed)
+	}
+	if renamed["name"] != "平台研发部" {
+		t.Errorf("name = %v, want 平台研发部", renamed["name"])
+	}
+	if renamed["id"] != deptID || renamed["type"] != "研发" {
+		t.Errorf("id/type must be preserved across a rename: %v", renamed)
+	}
+
+	// department detail and the member view both report the new name
+	status, detail := doJSON(t, http.MethodGet, srv.URL+"/api/v1/departments/"+deptID, nil)
+	if status != http.StatusOK {
+		t.Fatalf("get department status = %d, want 200", status)
+	}
+	if detail["name"] != "平台研发部" {
+		t.Errorf("detail name = %v, want 平台研发部", detail["name"])
+	}
+	members, _ := detail["members"].([]any)
+	if len(members) != 1 {
+		t.Fatalf("members = %v, want 1", detail["members"])
+	}
+	member, _ := members[0].(map[string]any)
+	if member["departmentId"] != deptID || member["departmentName"] != "平台研发部" {
+		t.Errorf("member not rebound to the renamed department: %v", member)
+	}
+
+	// another department cannot claim the new name
+	_, other := doJSON(t, http.MethodPost, srv.URL+"/api/v1/departments",
+		map[string]string{"name": "测试组", "type": "测试"})
+	otherID, _ := other["id"].(string)
+	status, body := doJSON(t, http.MethodPatch, srv.URL+"/api/v1/departments/"+otherID,
+		map[string]string{"name": "平台研发部"})
+	if status != http.StatusConflict {
+		t.Fatalf("duplicate rename status = %d (%v), want 409", status, body)
+	}
+
+	// unknown department -> 404, empty name / unknown field -> 400
+	if status, body := doJSON(t, http.MethodPatch, srv.URL+"/api/v1/departments/D404",
+		map[string]string{"name": "无人部"}); status != http.StatusNotFound {
+		t.Errorf("unknown department status = %d (%v), want 404", status, body)
+	}
+	if status, body := doJSON(t, http.MethodPatch, srv.URL+"/api/v1/departments/"+deptID,
+		map[string]string{"name": "   "}); status != http.StatusBadRequest {
+		t.Errorf("empty name status = %d (%v), want 400", status, body)
+	}
+	if status, body := doJSON(t, http.MethodPatch, srv.URL+"/api/v1/departments/"+deptID,
+		map[string]string{"nope": "x"}); status != http.StatusBadRequest {
+		t.Errorf("unknown field status = %d (%v), want 400", status, body)
+	}
+}

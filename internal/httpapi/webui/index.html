@@ -144,7 +144,10 @@
           <h3 id="drawer-title">部门详情</h3>
           <p class="drawer-meta" id="drawer-meta"></p>
         </div>
-        <button type="button" class="ghost" data-close-drawer>关闭</button>
+        <div class="drawer-actions">
+          <button type="button" class="ghost" id="drawer-rename">重命名</button>
+          <button type="button" class="ghost" data-close-drawer>关闭</button>
+        </div>
       </header>
       <div class="table-wrap">
         <table>
@@ -157,6 +160,21 @@
       <p class="empty" id="drawer-empty" hidden>该部门暂无人员。</p>
     </aside>
   </div>
+
+  <dialog class="modal" id="rename-dialog" aria-labelledby="rename-title">
+    <form id="rename-form" class="form" autocomplete="off">
+      <h3 id="rename-title">重命名部门</h3>
+      <p class="hint" id="rename-target">—</p>
+      <div class="field">
+        <label for="rename-name">新部门名称</label>
+        <input id="rename-name" name="name" type="text" maxlength="64" required>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="ghost" id="rename-cancel">取消</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form>
+  </dialog>
 
   <footer class="footer">
     <span>JSON API 与 UI 同源：<code>/api/v1/*</code> · UI 资源 <code>/ui/*</code></span>

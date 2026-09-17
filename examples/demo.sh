@@ -3,8 +3,12 @@
 # exercises every requirement, then shuts the server down.
 set -euo pipefail
 
-SERVICE_PORT="${SERVICE_PORT:-18080}"
-BASE="http://127.0.0.1:${SERVICE_PORT}"
+# Dedicated demo port. Deliberately does *not* inherit an ambient SERVICE_PORT:
+# on shared hosts that variable is often already claimed by another service
+# (this machine exports SERVICE_PORT=4211), which would make the demo bind an
+# occupied port and fail before its first request.
+DEMO_PORT="${DEMO_PORT:-18080}"
+BASE="http://127.0.0.1:${DEMO_PORT}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$(mktemp -d)/org-server"
 
@@ -20,7 +24,7 @@ echo "==> building server"
 (cd "${ROOT}" && go build -o "${BIN}" ./cmd/server)
 
 echo "==> starting server on ${BASE}"
-SERVICE_PORT="${SERVICE_PORT}" "${BIN}" >/dev/null 2>&1 &
+SERVICE_PORT="${DEMO_PORT}" "${BIN}" >/dev/null 2>&1 &
 SERVER_PID=$!
 
 for _ in $(seq 1 50); do
@@ -30,6 +34,7 @@ done
 
 post() { curl -sf -X POST "${BASE}/$1" -H 'Content-Type: application/json' -d "$2"; echo; }
 get() { curl -sf "${BASE}/$1"; echo; }
+patch() { curl -sf -X PATCH "${BASE}/$1" -H 'Content-Type: application/json' -d "$2"; echo; }
 
 echo
 echo "==> 1. create departments (研发/测试/产品/管理)"
@@ -54,15 +59,22 @@ get api/v1/persons/user-001
 get api/v1/persons/E0001
 
 echo
-echo "==> 5. list endpoints"
+echo "==> 5. rename department (id / type / members are preserved)"
+patch api/v1/departments/D0001 '{"name":"平台研发部"}'
+get api/v1/departments/D0001
+curl -s -o /dev/null -w 'rename to an existing name     -> %{http_code}\n' \
+  -X PATCH "${BASE}/api/v1/departments/D0002" -H 'Content-Type: application/json' -d '{"name":"平台研发部"}'
+
+echo
+echo "==> 6. list endpoints"
 get api/v1/persons
 get 'api/v1/persons?departmentId=D0002'
 get api/v1/departments
 
 echo
-echo "==> 6. error cases (expected 4xx)"
+echo "==> 7. error cases (expected 4xx)"
 curl -s -o /dev/null -w 'duplicate department name      -> %{http_code}\n' \
-  -X POST "${BASE}/api/v1/departments" -H 'Content-Type: application/json' -d '{"name":"研发中心","type":"研发"}'
+  -X POST "${BASE}/api/v1/departments" -H 'Content-Type: application/json' -d '{"name":"平台研发部","type":"研发"}'
 curl -s -o /dev/null -w 'invalid department type        -> %{http_code}\n' \
   -X POST "${BASE}/api/v1/departments" -H 'Content-Type: application/json' -d '{"name":"财务部","type":"finance"}'
 curl -s -o /dev/null -w 'unknown department on register -> %{http_code}\n' \

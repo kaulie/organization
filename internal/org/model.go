@@ -121,6 +121,12 @@ type CreateDepartmentRequest struct {
 	Type string `json:"type"`
 }
 
+// RenameDepartmentRequest is the payload for renaming a department. Only the
+// display name changes: the id, type, creation time and members are preserved.
+type RenameDepartmentRequest struct {
+	Name string `json:"name"`
+}
+
 // RegisterPersonRequest is the payload for registering a person.
 type RegisterPersonRequest struct {
 	Name         string `json:"name"`

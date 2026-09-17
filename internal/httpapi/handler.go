@@ -54,6 +54,7 @@ func New(svc *org.Service, logger *slog.Logger, opts ...Option) http.Handler {
 	mux.HandleFunc("GET "+basePath+"/departments", h.listDepartments)
 	mux.HandleFunc("POST "+basePath+"/departments", h.createDepartment)
 	mux.HandleFunc("GET "+basePath+"/departments/{id}", h.getDepartment)
+	mux.HandleFunc("PATCH "+basePath+"/departments/{id}", h.renameDepartment)
 	mux.HandleFunc("GET "+basePath+"/persons", h.listPersons)
 	mux.HandleFunc("POST "+basePath+"/persons", h.registerPerson)
 	mux.HandleFunc("GET "+basePath+"/persons/{id}", h.getPerson)
@@ -104,6 +105,22 @@ func (h *Handler) getDepartment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+// renameDepartment handles PATCH /api/v1/departments/{id}: it renames an
+// existing department while keeping its id, type and members.
+func (h *Handler) renameDepartment(w http.ResponseWriter, r *http.Request) {
+	var req org.RenameDepartmentRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	dept, err := h.svc.RenameDepartment(r.PathValue("id"), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dept)
 }
 
 // registerPerson handles POST /api/v1/persons.

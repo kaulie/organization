@@ -22,6 +22,11 @@ const (
 // state.
 type Store interface {
 	CreateDepartment(name string, t DepartmentType) (*Department, error)
+	// RenameDepartment changes the display name of an existing department and
+	// keeps its id, type, creation time and members untouched. It fails with
+	// KindNotFound for an unknown id and KindConflict when the new name is
+	// already taken by another department.
+	RenameDepartment(id, name string) (*Department, error)
 	GetDepartment(id string) (*Department, bool)
 	ListDepartments() []Department
 
@@ -77,6 +82,33 @@ func (s *memoryStore) CreateDepartment(name string, t DepartmentType) (*Departme
 	s.departments[dept.ID] = dept
 	s.departmentNames[normalizeKey(name)] = dept.ID
 	return dept, nil
+}
+
+// RenameDepartment changes a department's display name. The name index is
+// rebuilt under the same lock that guards uniqueness, so two concurrent renames
+// can never both claim the same name.
+func (s *memoryStore) RenameDepartment(id, name string) (*Department, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	dept, ok := s.departments[id]
+	if !ok {
+		return nil, NotFoundf("department %q not found", id)
+	}
+
+	newKey := normalizeKey(name)
+	if ownerID, taken := s.departmentNames[newKey]; taken && ownerID != id {
+		return nil, Conflictf("department name %q already exists (id=%s)", name, ownerID)
+	}
+
+	// Point the index at the new name. Renaming a department to its own name
+	// (or a differently cased/whitespaced variant) is an idempotent success.
+	delete(s.departmentNames, normalizeKey(dept.Name))
+	dept.Name = name
+	s.departmentNames[newKey] = id
+
+	copied := *dept
+	return &copied, nil
 }
 
 func (s *memoryStore) GetDepartment(id string) (*Department, bool) {

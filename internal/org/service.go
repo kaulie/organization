@@ -41,6 +41,21 @@ func (s *Service) CreateDepartment(req CreateDepartmentRequest) (*Department, er
 	return s.store.CreateDepartment(name, deptType)
 }
 
+// RenameDepartment changes the display name of an existing department. The id,
+// type, creation time and members stay as they are, so every reference to the
+// department keeps working after the rename. Requirement 5.
+func (s *Service) RenameDepartment(id string, req RenameDepartmentRequest) (*Department, error) {
+	deptID := strings.TrimSpace(id)
+	if deptID == "" {
+		return nil, Validationf("department id is required")
+	}
+	name, err := validateName("department name", req.Name)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.RenameDepartment(deptID, name)
+}
+
 // ListDepartments returns every department ordered by id.
 func (s *Service) ListDepartments() []Department {
 	return s.store.ListDepartments()

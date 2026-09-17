@@ -251,3 +251,96 @@ func TestKindOfUnknownError(t *testing.T) {
 		t.Errorf("KindOf(unknown) = %s, want %s", got, KindInternal)
 	}
 }
+func TestRenameDepartment(t *testing.T) {
+	svc := newTestService()
+	rd := mustCreateDepartment(t, svc, "研发中心", "研发")
+	qa := mustCreateDepartment(t, svc, "测试组", "测试")
+
+	// The name is trimmed, and id/type/createdAt survive the rename.
+	renamed, err := svc.RenameDepartment(rd.ID, RenameDepartmentRequest{Name: "  基础研发中心  "})
+	if err != nil {
+		t.Fatalf("RenameDepartment failed: %v", err)
+	}
+	if renamed.Name != "基础研发中心" {
+		t.Errorf("name = %q, want trimmed 基础研发中心", renamed.Name)
+	}
+	if renamed.ID != rd.ID || renamed.Type != DepartmentTypeRND {
+		t.Errorf("id/type must be preserved: got %+v, want id=%s type=%s", renamed, rd.ID, DepartmentTypeRND)
+	}
+	if !renamed.CreatedAt.Equal(rd.CreatedAt) {
+		t.Errorf("createdAt changed: %v -> %v", rd.CreatedAt, renamed.CreatedAt)
+	}
+
+	// The name index is rebuilt: the freed name becomes available again.
+	if _, err := svc.CreateDepartment(CreateDepartmentRequest{Name: "研发中心", Type: "研发"}); err != nil {
+		t.Errorf("old name should be reusable after rename: %v", err)
+	}
+
+	// Claiming a name that another department holds is a conflict, and the
+	// comparison stays whitespace/case-insensitive.
+	if _, err := svc.RenameDepartment(qa.ID, RenameDepartmentRequest{Name: " 基础研发中心 "}); err == nil {
+		t.Error("expected conflict when renaming to an existing name")
+	} else {
+		assertKind(t, err, KindConflict)
+	}
+
+	// Renaming a department to its own (current) name is an idempotent success.
+	if again, err := svc.RenameDepartment(qa.ID, RenameDepartmentRequest{Name: " 测试组 "}); err != nil {
+		t.Errorf("re-renaming to own name should succeed: %v", err)
+	} else if again.Name != "测试组" {
+		t.Errorf("name = %q, want 测试组", again.Name)
+	}
+
+	if _, err := svc.RenameDepartment(rd.ID, RenameDepartmentRequest{Name: "   "}); err == nil {
+		t.Error("expected validation error for empty name")
+	} else {
+		assertKind(t, err, KindValidation)
+	}
+
+	if _, err := svc.RenameDepartment("D404", RenameDepartmentRequest{Name: "无人部"}); err == nil {
+		t.Error("expected not-found error for unknown department")
+	} else {
+		assertKind(t, err, KindNotFound)
+	}
+}
+
+func TestRenameDepartmentKeepsMembersAndViews(t *testing.T) {
+	svc := newTestService()
+	rd := mustCreateDepartment(t, svc, "研发中心", "研发")
+	if _, err := svc.RegisterPerson(RegisterPersonRequest{Name: "Alice", ID: "u1", Type: "human", DepartmentID: rd.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.RenameDepartment(rd.ID, RenameDepartmentRequest{Name: "平台研发部"}); err != nil {
+		t.Fatalf("RenameDepartment failed: %v", err)
+	}
+
+	// Members stay attached to the same department id and see the new name.
+	detail, err := svc.GetDepartment(rd.ID)
+	if err != nil {
+		t.Fatalf("GetDepartment failed: %v", err)
+	}
+	if detail.Name != "平台研发部" || detail.Type != DepartmentTypeRND {
+		t.Errorf("unexpected department after rename: %+v", detail.Department)
+	}
+	if len(detail.Members) != 1 || detail.Members[0].DepartmentID != rd.ID {
+		t.Fatalf("members not preserved: %+v", detail.Members)
+	}
+	if detail.Members[0].DepartmentName != "平台研发部" {
+		t.Errorf("member departmentName = %q, want 平台研发部", detail.Members[0].DepartmentName)
+	}
+
+	person, err := svc.GetPerson("u1")
+	if err != nil {
+		t.Fatalf("GetPerson failed: %v", err)
+	}
+	if person.DepartmentID != rd.ID || person.DepartmentName != "平台研发部" {
+		t.Errorf("person view = %+v, want department %s named 平台研发部", person, rd.ID)
+	}
+
+	// The department list reflects the new name under the same id.
+	departments := svc.ListDepartments()
+	if len(departments) != 1 || departments[0].Name != "平台研发部" {
+		t.Errorf("ListDepartments() = %+v, want one department named 平台研发部", departments)
+	}
+}
