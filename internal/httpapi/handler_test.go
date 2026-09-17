@@ -68,6 +68,31 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
+// The deployment platform probes /health on every service; /healthz stays as an
+// alias. Both must report the deployment version.
+func TestHealthEndpointPlatformPaths(t *testing.T) {
+	svc := org.NewService(org.NewMemoryStore())
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(New(svc, logger, WithVersion("deadbeef")))
+	t.Cleanup(srv.Close)
+
+	for _, path := range []string{"/health", "/healthz"} {
+		status, body := doJSON(t, http.MethodGet, srv.URL+path, nil)
+		if status != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", path, status)
+		}
+		if body["status"] != "ok" {
+			t.Errorf("%s status field = %v, want ok", path, body["status"])
+		}
+		if body["version"] != "deadbeef" {
+			t.Errorf("%s version = %v, want deadbeef", path, body["version"])
+		}
+		if body["service"] != "organization" {
+			t.Errorf("%s service = %v, want organization", path, body["service"])
+		}
+	}
+}
+
 func TestDepartmentAndPersonFlow(t *testing.T) {
 	srv := newTestServer(t)
 

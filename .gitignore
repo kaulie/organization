@@ -13,6 +13,7 @@
 
 # Build output
 bin/
+outputs/
 
 # Code coverage profiles and other test artifacts
 *.out
