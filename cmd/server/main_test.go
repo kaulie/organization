@@ -1,8 +1,34 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 )
+
+// The deployment platform preserves backend/data/ across releases, and
+// scripts/start.sh exports ORG_DATA_DIR pointing at it, which is what makes the
+// stored data survive a redeploy.
+func TestDataFilePathUsesOrgDataDir(t *testing.T) {
+	t.Setenv("ORG_DATA_DIR", "/Users/example/runtime/organization/backend/data")
+	want := filepath.Join("/Users/example/runtime/organization/backend/data", "org-store.json")
+	if got := dataFilePath(); got != want {
+		t.Errorf("dataFilePath() = %q, want %q", got, want)
+	}
+}
+
+func TestDataFilePathFallsBackToBackendData(t *testing.T) {
+	want := filepath.Join("backend", "data", "org-store.json")
+
+	t.Setenv("ORG_DATA_DIR", "")
+	if got := dataFilePath(); got != want {
+		t.Errorf("dataFilePath() = %q, want %q", got, want)
+	}
+
+	t.Setenv("ORG_DATA_DIR", "   ")
+	if got := dataFilePath(); got != want {
+		t.Errorf("dataFilePath() with a blank value = %q, want %q", got, want)
+	}
+}
 
 func TestListenAddrDefaultsWhenNothingSet(t *testing.T) {
 	t.Setenv("ORG_ADDR", "")

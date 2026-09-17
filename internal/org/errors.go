@@ -44,6 +44,11 @@ func Conflictf(format string, args ...any) *Error {
 	return &Error{Kind: KindConflict, Message: fmt.Sprintf(format, args...)}
 }
 
+// Internalf builds an internal error, used when a mutation cannot be persisted.
+func Internalf(format string, args ...any) *Error {
+	return &Error{Kind: KindInternal, Message: fmt.Sprintf(format, args...)}
+}
+
 // KindOf extracts the kind of a typed domain error. Unknown errors are
 // reported as KindInternal.
 func KindOf(err error) ErrorKind {

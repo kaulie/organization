@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -24,6 +25,25 @@ var version = "dev"
 
 // defaultListenPort is used when neither ORG_ADDR nor SERVICE_PORT is set.
 const defaultListenPort = "8080"
+
+const (
+	// defaultDataDir is the store location used when ORG_DATA_DIR is unset. It
+	// mirrors the deployment layout: scripts/start.sh exports ORG_DATA_DIR
+	// (…/backend/data) and the deployment tool keeps backend/data/ across
+	// releases, which is what makes data survive a redeploy.
+	defaultDataDir = "backend/data"
+	// storeFileName is the JSON snapshot kept inside the data directory.
+	storeFileName = "org-store.json"
+)
+
+// dataFilePath resolves the JSON snapshot backing the store.
+func dataFilePath() string {
+	dir := strings.TrimSpace(os.Getenv("ORG_DATA_DIR"))
+	if dir == "" {
+		dir = defaultDataDir
+	}
+	return filepath.Join(dir, storeFileName)
+}
 
 // resolveVersion prefers the APP_VERSION injected by the deployment platform.
 func resolveVersion() string {
@@ -60,8 +80,26 @@ func main() {
 
 	appVersion := resolveVersion()
 	addr := listenAddr()
+	dataFile := dataFilePath()
 
-	service := org.NewService(org.NewMemoryStore())
+	// The store is persisted: the service is deployed by restarting the
+	// process, so an in-memory-only store would lose everything on every
+	// release. A data file that exists but cannot be decoded is fatal on
+	// purpose — never silently start empty on top of existing data.
+	store, err := org.NewFileStore(dataFile)
+	if err != nil {
+		logger.Error("store_open_failed", "dataFile", dataFile, "err", err)
+		os.Exit(1)
+	}
+	service := org.NewService(store)
+	// Log the loaded size: after a redeploy this line distinguishes "data was
+	// restored" from "the service started empty".
+	logger.Info("store_loaded",
+		"dataFile", dataFile,
+		"departments", len(store.ListDepartments()),
+		"persons", len(store.ListPersons("")),
+	)
+
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           httpapi.New(service, logger, httpapi.WithVersion(appVersion)),
