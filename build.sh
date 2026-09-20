@@ -47,5 +47,22 @@ done
 [ -f "${OUT}/scripts/restart.sh" ] || die "outputs/ 缺少 scripts/restart.sh"
 [ -x "${OUT}/scripts/start.sh" ] || die "outputs/scripts/start.sh 不可执行"
 
+# ---- 契约自动登记（注解是唯一真源）----
+# 读 cmd/server/main.go + internal/httpapi/handler.go 里的 swag 注解 → 生成 OpenAPI
+# → 上报服务中心（幂等：契约没变化不会写库、不会刷 revision）。
+# 发版流程本来就跑在本机，而服务中心只绑 127.0.0.1:4240，所以这里是天然合适的触发点。
+# 默认"尽力而为"：服务中心不可达只告警，不阻塞发版（REGISTER_CONTRACT_STRICT=1 可改成硬失败，
+# SKIP_REGISTER_CONTRACT=1 跳过；两种情况下都可以事后用 scripts/register-contract.sh 补登记）。
+if [ "${SKIP_REGISTER_CONTRACT:-0}" = "1" ]; then
+  log "跳过契约登记（SKIP_REGISTER_CONTRACT=1）"
+else
+  log "登记服务契约到服务中心（注解 → OpenAPI）"
+  if ! INSTANCES="${INSTANCES:-127.0.0.1:4244}" VERSION="${APP_VERSION}" \
+       bash scripts/register-contract.sh; then
+    [ "${REGISTER_CONTRACT_STRICT:-0}" = "1" ] && die "契约登记失败（REGISTER_CONTRACT_STRICT=1）"
+    log "警告：契约登记失败（服务中心可能不可达）；发版继续，可事后补跑 scripts/register-contract.sh"
+  fi
+fi
+
 log "完成 → ${OUT}/"
 ls -1 "${OUT}/bin" "${OUT}/scripts"

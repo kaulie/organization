@@ -1,9 +1,36 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// The service contract is generated from the swag annotations in this file, so
+// the General API Info block must survive refactors of cmd/server: swag reads
+// its entry point (-g) exclusively for that block, and without it the generated
+// document has no metadata at all (and the registration step keeps a stale or
+// empty contract). Its absence is therefore a build-time bug, not a doc nit.
+func TestMainCarriesGeneralAPIInfo(t *testing.T) {
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	text := string(source)
+	for _, directive := range []string{"@title", "@version", "@BasePath"} {
+		if !strings.Contains(text, directive) {
+			t.Errorf("main.go 缺少 swag 注解 %s（General API Info 是生成契约的入口）", directive)
+		}
+	}
+	// Must sit on the package comment: swag only parses the block above "package main".
+	if !strings.Contains(text, "package main") {
+		t.Fatal("main.go 里找不到 package main")
+	}
+	if strings.Index(text, "@title") > strings.Index(text, "package main") {
+		t.Error("General API Info 必须在 package main 之前，否则 swag 读不到")
+	}
+}
 
 // The deployment platform preserves backend/data/ across releases, and
 // scripts/start.sh exports ORG_DATA_DIR pointing at it, which is what makes the

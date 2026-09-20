@@ -1,0 +1,54 @@
+# 契约自动登记：push 到 main / 手工触发时，读代码里的 swag 注解 → 生成 OpenAPI
+# → 登记到服务中心（幂等：契约没变化时不写库，不刷 revision）。
+#
+# ⚠️ runner 必须是能直连服务中心的那台：注册中心默认只绑 127.0.0.1:4240
+# （写接口默认开放，刻意不暴露到网络），GitHub-hosted runner 够不到。
+#
+# 本仓库的发版脚本 build.sh 末尾也会登记一次（发版流程本来就在本机跑）；这个
+# workflow 是"合并到 main 就刷新契约"，两者互为补充，重复跑无副作用。
+name: register-contract
+
+on:
+  # 默认只手工触发：self-hosted runner 没就绪时不会一直排队干等。runner 就绪后可打开 push。
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  register:
+    name: 注解 → OpenAPI → 登记契约
+    runs-on: [self-hosted, macOS]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      # 服务中心的 client/ 脚本（公开仓库）；scripts/register-contract.sh 也会自己兜底克隆。
+      - name: 取服务中心的登记脚本
+        run: git clone --depth 1 https://github.com/kaulie/service-registry /tmp/service-registry
+
+      - name: 登记契约 + 实例
+        env:
+          SERVICE_REGISTRY_DIR: /tmp/service-registry
+          SERVICE_NAME: organization
+          DEPARTMENT_ID: D0006 # IT组织部，见 `curl $REGISTRY_URL/v1/departments`
+          INSTANCES: 127.0.0.1:4244
+          REGISTRY_URL: http://127.0.0.1:4240
+          REGISTRY_NS: default
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_NS_TOKEN }} # 写接口收紧后才需要
+          OWNER: kaulie
+          HEALTH_PATH: /health
+          TAGS: org
+          VERSION: ${{ github.sha }}
+        run: |
+          VERSION="${VERSION:0:8}" bash scripts/register-contract.sh
+
+      - name: 回读校验（端点必须真的进来了）
+        run: |
+          curl -fsS "http://127.0.0.1:4240/v1/namespaces/default/services/organization" |
+            python3 -c 'import json,sys; s=json.load(sys.stdin)["service"]; print("端点 %d 个，specHash %s" % (len(s["api"]["endpoints"]), (s["api"].get("specHash") or "")[:8]))'

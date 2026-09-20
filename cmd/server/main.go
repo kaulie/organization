@@ -1,4 +1,21 @@
 // Command server runs the organization management HTTP service.
+//
+// General API Info for swaggo/swag — this is the annotation entry point that
+// the release/CI step turns into the service contract (swag init -g
+// cmd/server/main.go), which is then registered in the service registry.
+// Annotations are the single source of truth: change an endpoint, change its
+// annotation next to the handler, and the next release refreshes the contract.
+//
+// Runtime has zero dependency on them (no swaggo import anywhere). @version is
+// only a human-readable fallback: the registration step passes the release's
+// APP_VERSION explicitly, so the registry always sees the deployed hash.
+//
+// @title           organization
+// @version         1.0.0
+// @description     组织架构管理服务：部门维护（新增 / 重命名 / 详情）与人员（HUMAN / AGENT）注册与查询。
+// @BasePath        /
+// @schemes         http
+// @host            127.0.0.1:4244
 package main
 
 import (

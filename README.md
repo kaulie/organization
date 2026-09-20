@@ -177,16 +177,86 @@ make run SERVICE_PORT=9000                             # 同上，走 Makefile
 - 部门 ID：`D` + 4 位序号，如 `D0001`。
 - 工号：`E` + 4 位序号，如 `E0001`，按注册顺序分配，全局唯一且不重复。
 
+## 服务契约与自动登记（注解是唯一真源）
+
+本服务的对外契约**不是手写的规范文件，而是代码里的注解**：`swag init` 读注解生成
+OpenAPI，再由服务中心的脚本上报。接口改了，注解跟着改，下一次发布/CI 契约自动刷新 ——
+没有人需要手工贴 spec。
+
+```
+cmd/server/main.go 顶部（General API Info）
+internal/httpapi/handler.go 每个 handler 一段注解
+        │
+        ├─ swag init -g cmd/server/main.go -o docs --outputTypes json   →  docs/swagger.json（产物，不提交）
+        └─ scripts/register-contract.sh  →  服务中心 client/ci/register-go-service.sh  →  PUT 契约 + 实例
+```
+
+注解长这样（`internal/httpapi/handler.go`，只影响生成规范，**运行期零依赖**，服务不 import swaggo 任何包）：
+
+```go
+// @Summary  部门重命名
+// @Tags     departments
+// @Param    id       path      string                       true  "部门 ID，如 D0001"
+// @Param    request  body      org.RenameDepartmentRequest  true  "新名称"
+// @Success  200      {object}  org.Department
+// @Router   /api/v1/departments/{id} [patch]
+```
+
+### 触发点
+
+| 触发点 | 位置 | 说明 |
+| --- | --- | --- |
+| 发版 | `build.sh` 末尾 | 发版流程跑在本机，而服务中心只绑 `127.0.0.1:4240`，所以这里是主要触发点 |
+| CI | `.github/workflows/register-contract.yml` | 需 **self-hosted runner**（能直连服务中心）；默认只手工触发，runner 就绪后打开 `push: branches: [main]` |
+| 手工 / 补登记 | `make register` 或 `bash scripts/register-contract.sh` | 幂等，随时可跑 |
+
+登记是**幂等**的：规范原文的 sha256 与库里一致时跳过 PUT（不刷 revision，不产生无意义的变更记录），
+实例集合按声明式整组对齐，重复跑无副作用。
+
+### 参数（都可用环境变量覆盖）
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `SERVICE_NAME` | `organization` | 注册用的服务名 |
+| `DEPARTMENT_ID` | `D0006` | 归属部门（IT组织部）。查目录：`curl http://127.0.0.1:4240/v1/departments` |
+| `INSTANCES` | `127.0.0.1:4244` | 实例地址，逗号分隔；端口即本服务在部署平台的契约端口 |
+| `REGISTRY_URL` | `http://127.0.0.1:4240` | 服务中心地址（只绑本机回环） |
+| `REGISTRY_NS` / `REGISTRY_TOKEN` | `default` / 空 | 命名空间与写令牌（写接口收紧后才需要，走密钥管理，别写进仓库） |
+| `VERSION` | `$APP_VERSION` 或 `git describe` | 上报的版本号；发版时即本次部署的 8 位短 hash。**只在契约真的变化时才会写进库里**：`register.sh` 比对规范原文 sha256 一致就跳过整个 PUT（避免把变更表刷成噪声），所以纯代码重构不会改动注册中心里的 `version` |
+| `OWNER` / `HEALTH_PATH` / `TAGS` / `GIT_REPO` | `kaulie` / `/health` / `org` / 本仓库地址 | 契约元数据 |
+| `SKIP_REGISTER_CONTRACT=1` | 关 | `build.sh` 里跳过登记 |
+| `REGISTER_CONTRACT_STRICT=1` | 关 | `build.sh` 里把登记失败从「告警」改成「让发版失败」 |
+
+服务中心的客户端脚本（`client/ci/register-go-service.sh`、`client/register.sh`）在
+[service-registry](https://github.com/kaulie/service-registry) 仓库里；`scripts/register-contract.sh`
+按「环境变量指定 → 本地检出 → 浅克隆兜底」的顺序找到它，所以服务仓库不需要 vendor 一份副本。
+
+```bash
+# 本地看一眼注解生成了什么（不上报）
+make contract-swagger
+python3 -c 'import json;d=json.load(open("docs/swagger.json"));print(list(d["paths"]))'
+
+# 登记（幂等）并回读校验
+make register
+curl -s http://127.0.0.1:4240/v1/namespaces/default/services/organization |
+  python3 -c 'import json,sys;s=json.load(sys.stdin)["service"];print(s["departmentName"],len(s["api"]["endpoints"]),"个端点")'
+```
+
 ## 设计说明
 
 ```
-build.sh            发版构建（产出 outputs/，供部署平台 release.sh 调用）
-scripts/            标准启停脚本（start/stop/restart，见“部署与启停”）
-cmd/server          HTTP 服务入口（配置、优雅退出）
-internal/httpapi    传输层：路由、JSON 编解码、错误到 HTTP 状态码的映射
+build.sh            发版构建（产出 outputs/，供部署平台 release.sh 调用；末尾登记服务契约）
+scripts/            标准启停脚本（start/stop/restart，见“部署与启停”）+ register-contract.sh（契约登记）
+.github/workflows/  CI（register-contract.yml：注解 → OpenAPI → 登记，需 self-hosted runner）
+cmd/server          HTTP 服务入口（配置、优雅退出）+ swag General API Info（注解入口）
+internal/httpapi    传输层：路由、JSON 编解码、错误到 HTTP 状态码的映射、契约响应类型与注解
 internal/httpapi/webui  内置单页界面（go:embed，经 /ui/* 提供静态资源）
 internal/org        领域层：模型与校验、业务用例 Service、存储 Store（内存实现 + JSON 文件持久化包装）
 ```
+
+- **契约即注解**：对外契约由 `cmd/server/main.go`（General API Info）与 `internal/httpapi/handler.go`
+  （每个 handler 的 `@Summary/@Param/@Success/@Router`）生成，运行期零依赖；`route` 表既是 mux 的唯一来源，
+  也被 `contract_test.go` 拿来与注解逐条比对，防止「路由改了注解没改」（会向注册中心谎报接口）。
 
 - **分层动机**：`Store` 是接口，当前提供线程安全的 JSON 文件实现（内存工作集 + 原子落盘）；后续可替换为 SQLite/MySQL/远程服务而不影响用例与 API。
 - **一致性与并发**：`memoryStore` 用读写锁保护，创建部门的名称唯一性检查、ID/工号分配、创建人员的 ID 唯一性检查都在同一把锁内完成，避免竞态与重复工号。
@@ -201,10 +271,11 @@ internal/org        领域层：模型与校验、业务用例 Service、存储 
 ### 发版包约定
 
 ```
-build.sh                    仓库根目录，release.sh 调用它产出 outputs/
+build.sh                    仓库根目录，release.sh 调用它产出 outputs/；末尾读注解登记服务契约
 scripts/start.sh            启动（含探活）
 scripts/stop.sh             停止（TERM → 15s → KILL）
 scripts/restart.sh          重启（stop + start，平台 restartCmd）
+scripts/register-contract.sh  注解 → OpenAPI → 登记服务中心（发版与 CI 复用，见「服务契约与自动登记」）
 ```
 
 `APP_VERSION`（8 位短 hash）由发版工具注入，`build.sh` 同时用
@@ -280,17 +351,23 @@ RUNTIME_DIR=/Users/gaolei/runtime/organization PORT=4250 \
 ## 测试
 
 ```bash
-make test        # go test ./...
-make test-race   # go test -race ./...
-make cover       # 生成覆盖率
-make package     # 产出发版包 outputs/（等价于 ./build.sh）
+make test                 # go test ./...
+make test-race            # go test -race ./...
+make cover                # 生成覆盖率
+make package              # 产出发版包 outputs/（等价于 ./build.sh，末尾会登记契约）
+make contract-swagger     # 只从注解生成 docs/swagger.json（不上报，本地看契约长什么样）
+make register             # 注解 → OpenAPI → 登记到服务中心（幂等）
 ```
 
 启停脚本已按平台契约实测：首次启动并探活、重复启动幂等跳过、`restart.sh`
 换 pid、`stop.sh` 幂等（未运行返回 0）、陈旧 pid 文件自动清理、缺二进制或端口
 被占用时返回 1 并打印日志尾部、失败后清理 pid 文件。
 
-覆盖：部门创建（4 种类型 + 别名、校验、重名冲突）、部门重命名（保留 ID/类型/成员、名称索引重建、重名冲突、幂等自改、校验与不存在）、人员注册（工号分配、类型校验、部门存在性、ID 冲突）、部门详情含成员列表、人员查询（按 ID / 按工号）、列表按部门过滤、HTTP 全链路与错误状态码映射、数据文件持久化（跨重启恢复部门/人员/ID 序列、父目录自动创建、空文件视为空库、损坏或高版本文件拒绝启动、写盘失败回滚内存并返回 500）、`ORG_DATA_DIR` 解析。
+覆盖：部门创建（4 种类型 + 别名、校验、重名冲突）、部门重命名（保留 ID/类型/成员、名称索引重建、重名冲突、幂等自改、校验与不存在）、人员注册（工号分配、类型校验、部门存在性、ID 冲突）、部门详情含成员列表、人员查询（按 ID / 按工号）、列表按部门过滤、HTTP 全链路与错误状态码映射、数据文件持久化（跨重启恢复部门/人员/ID 序列、父目录自动创建、空文件视为空库、损坏或高版本文件拒绝启动、写盘失败回滚内存并返回 500）、`ORG_DATA_DIR` 解析、**契约一致性**（`internal/httpapi/contract_test.go` 逐条比对 `@Router` 注解与路由表：注解与路由任何一边多了/少了都失败；`cmd/server` 断言 General API Info 仍在 `package main` 之前的注解块里）。
+
+契约链路实测：`make contract-swagger` 从注解生成 6 个路径 / 9 个操作（含 `/health`、`/healthz`、`/api/v1/{departments,persons}` 的 7 个业务操作与全部请求/响应定义）；`make register` 上报后服务中心显示
+`organization · D0006 IT组织部 · 9 个端点 · 实例 127.0.0.1:4244`，重复执行输出
+「契约无变化…跳过登记」且不产生新的 revision（幂等）。`build.sh` 末尾的登记钩子同样实测通过（发版流程里自动刷新契约）。
 
 `examples/demo.sh` 第 7 步会**真实重启进程**（SIGTERM 停 → 重新拉起）并打印重启后的部门与人员，可直接复现「发布后数据不应该为空」。
 

@@ -35,6 +35,36 @@ func WithVersion(v string) Option {
 	return func(h *Handler) { h.version = v }
 }
 
+// route binds a method and a ServeMux pattern to its handler.
+type route struct {
+	method  string
+	path    string
+	handler http.HandlerFunc
+}
+
+// routes is the complete HTTP surface of the service in one place: the mux is
+// built from this table, and contract_test.go checks it against the swag
+// annotations that the release step turns into the registered OpenAPI document.
+// A route missing here is missing from the contract; an annotation without a
+// route here would advertise an endpoint that answers 404.
+func (h *Handler) routes() []route {
+	return []route{
+		// /health is the deployment platform's uniform probe path; /healthz is
+		// kept as an alias for the platform-independent convention.
+		{"GET", "/health", h.health},
+		{"GET", "/healthz", h.healthz},
+
+		{"GET", basePath + "/departments", h.listDepartments},
+		{"POST", basePath + "/departments", h.createDepartment},
+		{"GET", basePath + "/departments/{id}", h.getDepartment},
+		{"PATCH", basePath + "/departments/{id}", h.renameDepartment},
+
+		{"GET", basePath + "/persons", h.listPersons},
+		{"POST", basePath + "/persons", h.registerPerson},
+		{"GET", basePath + "/persons/{id}", h.getPerson},
+	}
+}
+
 // New builds the HTTP handler for the organization API. A nil logger falls
 // back to slog.Default().
 func New(svc *org.Service, logger *slog.Logger, opts ...Option) http.Handler {
@@ -47,17 +77,9 @@ func New(svc *org.Service, logger *slog.Logger, opts ...Option) http.Handler {
 	}
 
 	mux := http.NewServeMux()
-	// /health is the deployment platform's uniform probe path; /healthz is kept
-	// as an alias for the platform-independent convention.
-	mux.HandleFunc("GET /health", h.health)
-	mux.HandleFunc("GET /healthz", h.health)
-	mux.HandleFunc("GET "+basePath+"/departments", h.listDepartments)
-	mux.HandleFunc("POST "+basePath+"/departments", h.createDepartment)
-	mux.HandleFunc("GET "+basePath+"/departments/{id}", h.getDepartment)
-	mux.HandleFunc("PATCH "+basePath+"/departments/{id}", h.renameDepartment)
-	mux.HandleFunc("GET "+basePath+"/persons", h.listPersons)
-	mux.HandleFunc("POST "+basePath+"/persons", h.registerPerson)
-	mux.HandleFunc("GET "+basePath+"/persons/{id}", h.getPerson)
+	for _, rt := range h.routes() {
+		mux.HandleFunc(rt.method+" "+rt.path, rt.handler)
+	}
 
 	// Browser UI (embedded single page + assets). "/" is exact-matched so it
 	// cannot shadow the API routes above.
@@ -66,15 +88,33 @@ func New(svc *org.Service, logger *slog.Logger, opts ...Option) http.Handler {
 	return h.recoverPanic(h.logRequests(mux))
 }
 
+// health reports liveness. It is the probe the deployment platform polls, so
+// its path and payload are part of the platform contract.
+//
+// @Summary  健康检查
+// @Tags     system
+// @Produce  json
+// @Success  200  {object}  healthResponse
+// @Router   /health [get]
 func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status":  "ok",
-		"service": serviceName,
-		"version": h.version,
+	writeJSON(w, http.StatusOK, healthResponse{
+		Status:  "ok",
+		Service: serviceName,
+		Version: h.version,
 	})
 }
 
 // createDepartment handles POST /api/v1/departments.
+//
+// @Summary  新增部门
+// @Tags     departments
+// @Accept   json
+// @Produce  json
+// @Param    request  body      org.CreateDepartmentRequest  true  "部门名称与类型（研发/测试/产品/管理，支持英文别名）"
+// @Success  201      {object}  org.Department
+// @Failure  400      {object}  errorResponse  "参数校验失败"
+// @Failure  409      {object}  errorResponse  "部门名称已存在"
+// @Router   /api/v1/departments [post]
 func (h *Handler) createDepartment(w http.ResponseWriter, r *http.Request) {
 	var req org.CreateDepartmentRequest
 	if err := decodeJSON(r, &req); err != nil {
@@ -89,15 +129,40 @@ func (h *Handler) createDepartment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, dept)
 }
 
+// healthz is the path-agnostic convention alias of /health.
+//
+// @Summary  健康检查（/health 的别名）
+// @Tags     system
+// @Produce  json
+// @Success  200  {object}  healthResponse
+// @Router   /healthz [get]
+func (h *Handler) healthz(w http.ResponseWriter, r *http.Request) {
+	h.health(w, r)
+}
+
 // listDepartments handles GET /api/v1/departments.
+//
+// @Summary  部门列表
+// @Tags     departments
+// @Produce  json
+// @Success  200  {object}  departmentListResponse
+// @Router   /api/v1/departments [get]
 func (h *Handler) listDepartments(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"items": h.svc.ListDepartments(),
-		"types": org.DepartmentTypeNames(),
+	writeJSON(w, http.StatusOK, departmentListResponse{
+		Items: h.svc.ListDepartments(),
+		Types: org.DepartmentTypeNames(),
 	})
 }
 
 // getDepartment handles GET /api/v1/departments/{id}.
+//
+// @Summary  部门详情（含下属人员）
+// @Tags     departments
+// @Produce  json
+// @Param    id   path      string  true  "部门 ID，如 D0001"
+// @Success  200  {object}  org.DepartmentDetail
+// @Failure  404  {object}  errorResponse  "部门不存在"
+// @Router   /api/v1/departments/{id} [get]
 func (h *Handler) getDepartment(w http.ResponseWriter, r *http.Request) {
 	detail, err := h.svc.GetDepartment(r.PathValue("id"))
 	if err != nil {
@@ -109,6 +174,18 @@ func (h *Handler) getDepartment(w http.ResponseWriter, r *http.Request) {
 
 // renameDepartment handles PATCH /api/v1/departments/{id}: it renames an
 // existing department while keeping its id, type and members.
+//
+// @Summary  部门重命名
+// @Tags     departments
+// @Accept   json
+// @Produce  json
+// @Param    id       path      string                      true  "部门 ID，如 D0001"
+// @Param    request  body      org.RenameDepartmentRequest  true  "新名称"
+// @Success  200      {object}  org.Department
+// @Failure  400      {object}  errorResponse  "参数校验失败"
+// @Failure  404      {object}  errorResponse  "部门不存在"
+// @Failure  409      {object}  errorResponse  "部门名称已存在"
+// @Router   /api/v1/departments/{id} [patch]
 func (h *Handler) renameDepartment(w http.ResponseWriter, r *http.Request) {
 	var req org.RenameDepartmentRequest
 	if err := decodeJSON(r, &req); err != nil {
@@ -124,6 +201,17 @@ func (h *Handler) renameDepartment(w http.ResponseWriter, r *http.Request) {
 }
 
 // registerPerson handles POST /api/v1/persons.
+//
+// @Summary  人员注册（HUMAN / AGENT）
+// @Tags     persons
+// @Accept   json
+// @Produce  json
+// @Param    request  body      org.RegisterPersonRequest  true  "人员名称 / 人员 ID / 类型 / 所在部门"
+// @Success  201      {object}  org.PersonView  "注册成功，含系统分配的工号"
+// @Failure  400      {object}  errorResponse   "参数校验失败"
+// @Failure  404      {object}  errorResponse   "部门不存在"
+// @Failure  409      {object}  errorResponse   "人员 ID 已存在"
+// @Router   /api/v1/persons [post]
 func (h *Handler) registerPerson(w http.ResponseWriter, r *http.Request) {
 	var req org.RegisterPersonRequest
 	if err := decodeJSON(r, &req); err != nil {
@@ -139,20 +227,36 @@ func (h *Handler) registerPerson(w http.ResponseWriter, r *http.Request) {
 }
 
 // listPersons handles GET /api/v1/persons?departmentId=...
+//
+// @Summary  人员列表
+// @Tags     persons
+// @Produce  json
+// @Param    departmentId  query     string  false  "按部门过滤，如 D0001"
+// @Success  200           {object}  personListResponse
+// @Failure  404           {object}  errorResponse  "过滤用的部门不存在"
+// @Router   /api/v1/persons [get]
 func (h *Handler) listPersons(w http.ResponseWriter, r *http.Request) {
 	persons, err := h.svc.ListPersons(r.URL.Query().Get("departmentId"))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"items": persons,
-		"types": org.PersonTypeNames(),
+	writeJSON(w, http.StatusOK, personListResponse{
+		Items: persons,
+		Types: org.PersonTypeNames(),
 	})
 }
 
 // getPerson handles GET /api/v1/persons/{id}; id may be a person id or an
 // employee number.
+//
+// @Summary  人员信息（按人员 ID 或工号）
+// @Tags     persons
+// @Produce  json
+// @Param    id   path      string  true  "人员 ID（如 agent-001）或工号（如 E0001）"
+// @Success  200  {object}  org.PersonView
+// @Failure  404  {object}  errorResponse  "人员不存在"
+// @Router   /api/v1/persons/{id} [get]
 func (h *Handler) getPerson(w http.ResponseWriter, r *http.Request) {
 	person, err := h.svc.GetPerson(r.PathValue("id"))
 	if err != nil {
@@ -192,12 +296,10 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, err error) {
 	status := statusFor(err)
-	writeJSON(w, status, map[string]any{
-		"error": map[string]string{
-			"kind":    string(org.KindOf(err)),
-			"message": err.Error(),
-		},
-	})
+	writeJSON(w, status, errorResponse{Error: errorBody{
+		Kind:    string(org.KindOf(err)),
+		Message: err.Error(),
+	}})
 }
 
 func statusFor(err error) int {
@@ -242,9 +344,10 @@ func (h *Handler) recoverPanic(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				h.log.Error("panic", "path", r.URL.Path, "recover", rec)
-				writeJSON(w, http.StatusInternalServerError, map[string]any{
-					"error": map[string]string{"kind": "internal", "message": "internal server error"},
-				})
+				writeJSON(w, http.StatusInternalServerError, errorResponse{Error: errorBody{
+					Kind:    "internal",
+					Message: "internal server error",
+				}})
 			}
 		}()
 		next.ServeHTTP(w, r)
