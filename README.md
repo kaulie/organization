@@ -222,7 +222,7 @@ internal/httpapi/handler.go 每个 handler 一段注解
 | `INSTANCES` | `127.0.0.1:4244` | 实例地址，逗号分隔；端口即本服务在部署平台的契约端口 |
 | `REGISTRY_URL` | `http://127.0.0.1:4240` | 服务中心地址（只绑本机回环） |
 | `REGISTRY_NS` / `REGISTRY_TOKEN` | `default` / 空 | 命名空间与写令牌（写接口收紧后才需要，走密钥管理，别写进仓库） |
-| `VERSION` | `$APP_VERSION` 或 `git describe` | 上报的版本号；发版时即本次部署的 8 位短 hash |
+| `VERSION` | `$APP_VERSION` 或 `git describe` | 上报的版本号；发版时即本次部署的 8 位短 hash。**只在契约真的变化时才会写进库里**：`register.sh` 比对规范原文 sha256 一致就跳过整个 PUT（避免把变更表刷成噪声），所以纯代码重构不会改动注册中心里的 `version` |
 | `OWNER` / `HEALTH_PATH` / `TAGS` / `GIT_REPO` | `kaulie` / `/health` / `org` / 本仓库地址 | 契约元数据 |
 | `SKIP_REGISTER_CONTRACT=1` | 关 | `build.sh` 里跳过登记 |
 | `REGISTER_CONTRACT_STRICT=1` | 关 | `build.sh` 里把登记失败从「告警」改成「让发版失败」 |
