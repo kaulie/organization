@@ -19,6 +19,13 @@ backend/
 bin/
 outputs/
 
+# 契约产物：由 swag 从代码注解生成（scripts/register-contract.sh / build.sh / CI），
+# 不提交 —— 注解才是真源，产物手工改没意义。只产 swagger.json，所以不会有 docs.go
+# 把 swaggo 拖成运行期依赖。
+docs/swagger.json
+docs/swagger.yaml
+docs/docs.go
+
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*
