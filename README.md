@@ -4,8 +4,8 @@
 
 本仓库当前实现了**组织架构管理**的第一个切片：部门维护、人员（HUMAN/AGENT）注册与查询。
 
-- 语言/运行时：Go 1.24（仅使用标准库，无第三方依赖）
-- 形态：HTTP + JSON 服务；数据以 JSON 文件持久化（`<ORG_DATA_DIR>/org-store.json`，默认 `backend/data`），进程重启/重新发布后数据保留
+- 语言/运行时：Go 1.24（PostgreSQL 驱动 `jackc/pgx`；其余仍是标准库）
+- 形态：HTTP + JSON 服务。配置了 `ORG_DATABASE_URL` 时数据在 PostgreSQL（`49.234.45.173` 上的 `organization` 库）；未配置时仍用 JSON 文件（`<ORG_DATA_DIR>/org-store.json`）。第一次连上空库时，会把已有的 JSON 快照导入，避免把线上部门目录换成空库。
 - 界面：内置单页 Web UI（`embed` 进二进制，打开 `/` 即用，见「Web UI（浏览器界面）」）
 
 ## 功能与需求对应
@@ -100,7 +100,8 @@ http://localhost:8080/          # 单页界面
 | `ORG_ADDR` | — | 完整监听地址，如 `127.0.0.1:4250`。**优先级高于 `SERVICE_PORT`** |
 | `ORG_BIND` | `127.0.0.1` | 仅由 `scripts/start.sh` 使用：决定绑定哪张网卡，最终地址为 `${ORG_BIND}:${SERVICE_PORT}` |
 | `APP_VERSION` | `dev` | 版本号，出现在 `/health` 响应与启动/关闭日志中；发版时由平台注入，二进制内以 `-ldflags` 兜底 |
-| `ORG_DATA_DIR` | `backend/data` | 数据目录，存储文件为 `<ORG_DATA_DIR>/org-store.json`。部署时 `scripts/start.sh` 注入 `…/backend/data`，该目录由部署器跨发布保留（见「数据持久化」） |
+| `ORG_DATA_DIR` | `backend/data` | JSON 快照目录（`<ORG_DATA_DIR>/org-store.json`）。没设 `ORG_DATABASE_URL` 时它就是存储；设了之后它只作为空库的一次性导入来源。部署时 `scripts/start.sh` 注入 `…/backend/data`，该目录跨发布保留 |
+| `ORG_DATABASE_URL` | 空 | PostgreSQL 连接串。部署由平台 `runtimeEnv` 注入，指向 `49.234.45.173:5432/organization`（`sslmode=require`）。口令不进仓库。未设置时使用 JSON 文件 |
 
 优先级：**`ORG_ADDR` > `SERVICE_PORT` > 内置默认 `8080`**。
 
@@ -251,17 +252,17 @@ scripts/            标准启停脚本（start/stop/restart，见“部署与启
 cmd/server          HTTP 服务入口（配置、优雅退出）+ swag General API Info（注解入口）
 internal/httpapi    传输层：路由、JSON 编解码、错误到 HTTP 状态码的映射、契约响应类型与注解
 internal/httpapi/webui  内置单页界面（go:embed，经 /ui/* 提供静态资源）
-internal/org        领域层：模型与校验、业务用例 Service、存储 Store（内存实现 + JSON 文件持久化包装）
+internal/org        领域层：模型与校验、业务用例 Service、存储 Store（内存、JSON 文件、PostgreSQL）
 ```
 
 - **契约即注解**：对外契约由 `cmd/server/main.go`（General API Info）与 `internal/httpapi/handler.go`
   （每个 handler 的 `@Summary/@Param/@Success/@Router`）生成，运行期零依赖；`route` 表既是 mux 的唯一来源，
   也被 `contract_test.go` 拿来与注解逐条比对，防止「路由改了注解没改」（会向注册中心谎报接口）。
 
-- **分层动机**：`Store` 是接口，当前提供线程安全的 JSON 文件实现（内存工作集 + 原子落盘）；后续可替换为 SQLite/MySQL/远程服务而不影响用例与 API。
-- **一致性与并发**：`memoryStore` 用读写锁保护，创建部门的名称唯一性检查、ID/工号分配、创建人员的 ID 唯一性检查都在同一把锁内完成，避免竞态与重复工号。
-- **校验前移**：字段格式校验在 `Service`，唯一性等需要读取全局状态的校验在 `Store` 内加锁完成。
-- **持久化**：`org.NewFileStore` 在内存 store 之上把每次写操作镜像到 JSON 文件，写出采用「临时文件 + `fsync` + `rename`」原子替换；写入失败会回滚内存状态并返回 `500`，避免「接口报成功、重启后数据消失」。数据文件损坏或来自更新的 schema 时进程**拒绝启动**（绝不静默当成空数据）。
+- **分层动机**：`Store` 是接口。部署使用 PostgreSQL；本机没有连接串时仍用 JSON 文件（内存工作集 + 原子落盘）。用例层与 HTTP/API 不依赖具体存储。
+- **一致性与并发**：内存实现用读写锁把名称唯一性、ID/工号分配包在同一次操作里。PostgreSQL 把同样的检查、发号和插入放在一个事务里，名称与工号用唯一约束兜底。
+- **校验前移**：字段格式校验在 `Service`，唯一性等需要读取全局状态的校验在 `Store` 内完成。
+- **持久化**：设置 `ORG_DATABASE_URL` 后读写都走 PostgreSQL。库还是空的、并且 `org-store.json` 能读时，启动会把这份快照导入一次（部门、人员、发号序列一起提交）；库里已经有部门则不再导入。JSON 文件损坏且库仍为空时进程拒绝启动。未设置连接串时仍用 `org.NewFileStore`：写出采用「临时文件 + `fsync` + `rename`」，写入失败回滚内存并返回 `500`。
 - **类型规范化**：`研发/测试/产品/管理` 为规范存储值，英文别名在入口处归一化，便于对外友好、对内稳定。
 
 ## 部署与启停（deployment 平台标准）
@@ -298,7 +299,7 @@ scripts/register-contract.sh  注解 → OpenAPI → 登记服务中心（发版
 ├── VERSION / DEPLOYMENT / COMMIT / GIT_REPO_URL
 └── backend/                ← deploy.sh rsync --delete 时保留
     ├── .env                可选覆盖项，首次启动自动生成（权限 600，不入 git）
-    ├── data/               数据目录（org-store.json，跨发布保留）
+    ├── data/               历史 JSON 快照（org-store.json，跨发布保留；空库时导入 PostgreSQL）
     ├── runtime.pid         进程号
     └── server.log          标准输出/错误
 ```
@@ -328,21 +329,20 @@ RUNTIME_DIR=/Users/gaolei/runtime/organization PORT=4250 \
 
 ### 数据持久化
 
-存储是 JSON 文件：`${ORG_DATA_DIR}/org-store.json`（默认 `backend/data/org-store.json`）。
+部署后的存储是 PostgreSQL：`ORG_DATABASE_URL` 由部署平台的 `runtimeEnv` 注入，`scripts/start.sh` 让这个值优先于 `backend/.env`。库在 `49.234.45.173:5432`，库名 `organization`，连接使用 `sslmode=require`。口令只放在平台运行时环境里，不进 git。
 
-- 部署时 `scripts/start.sh` 注入 `ORG_DATA_DIR=${RUNTIME_DIR}/backend/data`，而 `deploy.sh` 以
-  `--filter='P backend/data/'` 保留该目录 —— 所以**重新发布（= 重启进程）不会丢数据**。
-- 每次写操作都镜像到磁盘；写出是「临时文件 + `fsync` + `rename`」的原子替换，进程被强杀也不会留下半个文件。
-- 写盘失败会回滚内存状态并返回 `500`（`{"error":{"kind":"internal",...}}`），不会出现「接口说成功、重启后数据没了」。
-- 进程启动时会打一行 `store_loaded`（含 `dataFile` 与已加载的部门/人员数），可据此确认数据是否被恢复：
+此前的存储是 JSON 文件 `${ORG_DATA_DIR}/org-store.json`（不是 SQLite）。第一次用空的 PostgreSQL 启动时，进程会导入这份文件里的部门、人员和发号序列，然后继续从原序列往后编号。库里已经有部门时不再导入，所以重启不会把同一份快照写两遍。
+
+- `deploy.sh` 仍以 `--filter='P backend/data/'` 保留 `backend/data/`，因此导入来源在发布后还在。
+- `/health` 会 ping 数据库；连不上时返回 503，部署探活失败，不会把一个空进程当成上线成功。
+- 进程启动时会打一行 `store_loaded`（含部门/人员数）和 `store_opened`（`engine=postgres`，以及是否 `importedFromFile`）：
 
   ```bash
   grep store_loaded ~/runtime/organization/backend/server.log | tail -1
   ```
 
-- 数据文件损坏、无法读取或来自更新的 schema 时，进程**拒绝启动**并打印 `store_open_failed`，
-  避免把已有数据静默当成「空数据」。
-- 需要换成 SQLite/MySQL：替换 `Store` 实现即可，用例层与 HTTP/API 不受影响。
+- 连接失败、或空库遇到损坏的 JSON 快照时，进程拒绝启动并打印 `store_open_failed` / `store_import_failed`。
+- 未设置 `ORG_DATABASE_URL`（本地 `make run`）时仍写 JSON 文件：临时文件 + `fsync` + `rename`，写盘失败回滚并返回 500。
 
 > 说明：本能力是在「发布后发现数据为空」的问题后补上的。**此前**实例是纯内存存储，
 > 那次发布之前录入的数据没有落盘、无法找回；从引入本版本起的发布不会再丢数据。

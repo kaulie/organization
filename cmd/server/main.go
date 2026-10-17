@@ -53,13 +53,21 @@ const (
 	storeFileName = "org-store.json"
 )
 
-// dataFilePath resolves the JSON snapshot backing the store.
+// dataFilePath resolves the JSON snapshot. When ORG_DATABASE_URL is set this
+// file is only the one-time import source for PostgreSQL; otherwise it is the
+// store itself.
 func dataFilePath() string {
 	dir := strings.TrimSpace(os.Getenv("ORG_DATA_DIR"))
 	if dir == "" {
 		dir = defaultDataDir
 	}
 	return filepath.Join(dir, storeFileName)
+}
+
+// databaseURL is the PostgreSQL connection string. Empty means keep the JSON
+// file store, which is how local runs and tests work without a database.
+func databaseURL() string {
+	return strings.TrimSpace(os.Getenv("ORG_DATABASE_URL"))
 }
 
 // resolveVersion prefers the APP_VERSION injected by the deployment platform.
@@ -98,23 +106,58 @@ func main() {
 	appVersion := resolveVersion()
 	addr := listenAddr()
 	dataFile := dataFilePath()
+	dsn := databaseURL()
 
-	// The store is persisted: the service is deployed by restarting the
-	// process, so an in-memory-only store would lose everything on every
-	// release. A data file that exists but cannot be decoded is fatal on
-	// purpose — never silently start empty on top of existing data.
-	store, err := org.NewFileStore(dataFile)
-	if err != nil {
-		logger.Error("store_open_failed", "dataFile", dataFile, "err", err)
-		os.Exit(1)
+	// PostgreSQL is the deployed store. The JSON file remains the fallback for
+	// a process started without ORG_DATABASE_URL, and the one-time source the
+	// first PostgreSQL start imports when the database is still empty. A file
+	// or database that exists but cannot be read is fatal: never start empty
+	// on top of data we failed to load.
+	var store org.Store
+	var err error
+	if dsn != "" {
+		pgCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		pgStore, openErr := org.OpenPostgres(pgCtx, dsn)
+		if openErr != nil {
+			cancel()
+			logger.Error("store_open_failed", "engine", "postgres", "err", openErr)
+			os.Exit(1)
+		}
+		imported, importErr := pgStore.ImportFileIfEmpty(pgCtx, dataFile)
+		cancel()
+		if importErr != nil {
+			pgStore.Close()
+			logger.Error("store_import_failed", "engine", "postgres", "dataFile", dataFile, "err", importErr)
+			os.Exit(1)
+		}
+		defer pgStore.Close()
+		store = pgStore
+		logger.Info("store_opened", "engine", "postgres", "importedFromFile", imported, "dataFile", dataFile)
+	} else {
+		store, err = org.NewFileStore(dataFile)
+		if err != nil {
+			logger.Error("store_open_failed", "engine", "file", "dataFile", dataFile, "err", err)
+			os.Exit(1)
+		}
+		logger.Info("store_opened", "engine", "file", "dataFile", dataFile)
 	}
 	service := org.NewService(store)
+	departments, err := store.ListDepartments()
+	if err != nil {
+		logger.Error("store_load_failed", "err", err)
+		os.Exit(1)
+	}
+	persons, err := store.ListPersons("")
+	if err != nil {
+		logger.Error("store_load_failed", "err", err)
+		os.Exit(1)
+	}
 	// Log the loaded size: after a redeploy this line distinguishes "data was
 	// restored" from "the service started empty".
 	logger.Info("store_loaded",
 		"dataFile", dataFile,
-		"departments", len(store.ListDepartments()),
-		"persons", len(store.ListPersons("")),
+		"departments", len(departments),
+		"persons", len(persons),
 	)
 
 	server := &http.Server{

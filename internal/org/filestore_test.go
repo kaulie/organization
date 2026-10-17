@@ -13,7 +13,11 @@ func TestFileStoreStartsEmptyWhenFileMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileStore failed: %v", err)
 	}
-	if got := len(store.ListDepartments()); got != 0 {
+	departments, err := store.ListDepartments()
+	if err != nil {
+		t.Fatalf("ListDepartments: %v", err)
+	}
+	if got := len(departments); got != 0 {
 		t.Fatalf("departments = %d, want 0 for a fresh store", got)
 	}
 
@@ -50,7 +54,10 @@ func TestFileStoreSurvivesReopen(t *testing.T) {
 	}
 	reopened := NewService(second)
 
-	departments := reopened.ListDepartments()
+	departments, err := reopened.ListDepartments()
+	if err != nil {
+		t.Fatalf("ListDepartments after reopen: %v", err)
+	}
 	if len(departments) != 1 || departments[0].ID != rd.ID || departments[0].Name != "平台研发部" {
 		t.Fatalf("departments after reopen = %+v, want the renamed %s", departments, rd.ID)
 	}
@@ -113,7 +120,11 @@ func TestFileStoreEmptyFileStartsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an empty data file should start an empty store: %v", err)
 	}
-	if got := len(store.ListDepartments()); got != 0 {
+	departments, err := store.ListDepartments()
+	if err != nil {
+		t.Fatalf("ListDepartments: %v", err)
+	}
+	if got := len(departments); got != 0 {
 		t.Errorf("departments = %d, want 0", got)
 	}
 }
@@ -166,7 +177,11 @@ func TestFileStoreRollsBackWhenWriteFails(t *testing.T) {
 		assertKind(t, err, KindInternal)
 	}
 
-	if got := len(svc.ListDepartments()); got != 1 {
+	departments, err := svc.ListDepartments()
+	if err != nil {
+		t.Fatalf("ListDepartments: %v", err)
+	}
+	if got := len(departments); got != 1 {
 		t.Errorf("departments = %d, want 1 (the failed create must be rolled back)", got)
 	}
 }

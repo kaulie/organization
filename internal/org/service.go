@@ -1,6 +1,9 @@
 package org
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // Service implements the organization management use cases on top of a Store.
 type Service struct {
@@ -56,21 +59,47 @@ func (s *Service) RenameDepartment(id string, req RenameDepartmentRequest) (*Dep
 	return s.store.RenameDepartment(deptID, name)
 }
 
+// Ping reports whether the backing store can serve a request. Stores that keep
+// their data in process return nil; the PostgreSQL store checks the database,
+// which is what /health uses so a deploy does not go live against a database
+// it cannot reach.
+func (s *Service) Ping(ctx context.Context) error {
+	type pinger interface {
+		Ping(context.Context) error
+	}
+	p, ok := s.store.(pinger)
+	if !ok {
+		return nil
+	}
+	return p.Ping(ctx)
+}
+
 // ListDepartments returns every department ordered by id.
-func (s *Service) ListDepartments() []Department {
+func (s *Service) ListDepartments() ([]Department, error) {
 	return s.store.ListDepartments()
 }
 
 // GetDepartment returns a department and its members. Requirement 3.
 func (s *Service) GetDepartment(id string) (*DepartmentDetail, error) {
 	deptID := strings.TrimSpace(id)
-	dept, ok := s.store.GetDepartment(deptID)
+	dept, ok, err := s.store.GetDepartment(deptID)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, NotFoundf("department %q not found", id)
 	}
+	members, err := s.store.ListPersons(dept.ID)
+	if err != nil {
+		return nil, err
+	}
+	views, err := s.viewAll(members)
+	if err != nil {
+		return nil, err
+	}
 	return &DepartmentDetail{
 		Department: *dept,
-		Members:    s.viewAll(s.store.ListPersons(dept.ID)),
+		Members:    views,
 	}, nil
 }
 
@@ -99,7 +128,9 @@ func (s *Service) RegisterPerson(req RegisterPersonRequest) (*PersonView, error)
 	if departmentID == "" {
 		return nil, Validationf("departmentId is required")
 	}
-	if _, ok := s.store.GetDepartment(departmentID); !ok {
+	if _, ok, err := s.store.GetDepartment(departmentID); err != nil {
+		return nil, err
+	} else if !ok {
 		return nil, NotFoundf("department %q not found", req.DepartmentID)
 	}
 
@@ -107,7 +138,10 @@ func (s *Service) RegisterPerson(req RegisterPersonRequest) (*PersonView, error)
 	if err != nil {
 		return nil, err
 	}
-	view := s.view(*person)
+	view, err := s.view(*person)
+	if err != nil {
+		return nil, err
+	}
 	return &view, nil
 }
 
@@ -115,11 +149,17 @@ func (s *Service) RegisterPerson(req RegisterPersonRequest) (*PersonView, error)
 func (s *Service) ListPersons(departmentID string) ([]PersonView, error) {
 	deptID := strings.TrimSpace(departmentID)
 	if deptID != "" {
-		if _, ok := s.store.GetDepartment(deptID); !ok {
+		if _, ok, err := s.store.GetDepartment(deptID); err != nil {
+			return nil, err
+		} else if !ok {
 			return nil, NotFoundf("department %q not found", departmentID)
 		}
 	}
-	return s.viewAll(s.store.ListPersons(deptID)), nil
+	persons, err := s.store.ListPersons(deptID)
+	if err != nil {
+		return nil, err
+	}
+	return s.viewAll(persons)
 }
 
 // GetPerson looks a person up by its registered id or by employee number.
@@ -130,29 +170,46 @@ func (s *Service) GetPerson(id string) (*PersonView, error) {
 		return nil, Validationf("person id is required")
 	}
 
-	person, ok := s.store.GetPerson(key)
+	person, ok, err := s.store.GetPerson(key)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
-		person, ok = s.store.GetPersonByEmployeeNo(key)
+		person, ok, err = s.store.GetPersonByEmployeeNo(key)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if !ok {
 		return nil, NotFoundf("person %q not found", id)
 	}
-	view := s.view(*person)
+	view, err := s.view(*person)
+	if err != nil {
+		return nil, err
+	}
 	return &view, nil
 }
 
-func (s *Service) view(p Person) PersonView {
+func (s *Service) view(p Person) (PersonView, error) {
 	view := PersonView{Person: p}
-	if dept, ok := s.store.GetDepartment(p.DepartmentID); ok {
+	dept, ok, err := s.store.GetDepartment(p.DepartmentID)
+	if err != nil {
+		return PersonView{}, err
+	}
+	if ok {
 		view.DepartmentName = dept.Name
 	}
-	return view
+	return view, nil
 }
 
-func (s *Service) viewAll(persons []Person) []PersonView {
+func (s *Service) viewAll(persons []Person) ([]PersonView, error) {
 	views := make([]PersonView, 0, len(persons))
 	for _, p := range persons {
-		views = append(views, s.view(p))
+		view, err := s.view(p)
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, view)
 	}
-	return views
+	return views, nil
 }

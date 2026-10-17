@@ -57,6 +57,17 @@ func TestDataFilePathFallsBackToBackendData(t *testing.T) {
 	}
 }
 
+func TestDatabaseURLTrimsSpace(t *testing.T) {
+	t.Setenv("ORG_DATABASE_URL", "  postgres://organization@db.example/organization  ")
+	if got := databaseURL(); got != "postgres://organization@db.example/organization" {
+		t.Errorf("databaseURL() = %q", got)
+	}
+	t.Setenv("ORG_DATABASE_URL", "   ")
+	if got := databaseURL(); got != "" {
+		t.Errorf("blank databaseURL() = %q, want empty", got)
+	}
+}
+
 func TestListenAddrDefaultsWhenNothingSet(t *testing.T) {
 	t.Setenv("ORG_ADDR", "")
 	t.Setenv("SERVICE_PORT", "")

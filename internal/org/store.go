@@ -28,13 +28,18 @@ type Store interface {
 	// KindNotFound for an unknown id and KindConflict when the new name is
 	// already taken by another department.
 	RenameDepartment(id, name string) (*Department, error)
-	GetDepartment(id string) (*Department, bool)
-	ListDepartments() []Department
+	// GetDepartment reports false when the id is unknown. A non-nil error means
+	// the lookup itself failed (for example the database is unreachable) and
+	// must not be treated as "not found".
+	GetDepartment(id string) (*Department, bool, error)
+	ListDepartments() ([]Department, error)
 
 	RegisterPerson(name, id string, t PersonType, departmentID string) (*Person, error)
-	GetPerson(id string) (*Person, bool)
-	GetPersonByEmployeeNo(employeeNo string) (*Person, bool)
-	ListPersons(departmentID string) []Person
+	GetPerson(id string) (*Person, bool, error)
+	GetPersonByEmployeeNo(employeeNo string) (*Person, bool, error)
+	// ListPersons returns the members of a department. An empty departmentID
+	// returns every registered person.
+	ListPersons(departmentID string) ([]Person, error)
 }
 
 // memoryStore is an in-memory Store implementation.
@@ -116,19 +121,19 @@ func (s *memoryStore) RenameDepartment(id, name string) (*Department, error) {
 	return &copied, nil
 }
 
-func (s *memoryStore) GetDepartment(id string) (*Department, bool) {
+func (s *memoryStore) GetDepartment(id string) (*Department, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	dept, ok := s.departments[id]
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 	copied := *dept
-	return &copied, true
+	return &copied, true, nil
 }
 
-func (s *memoryStore) ListDepartments() []Department {
+func (s *memoryStore) ListDepartments() ([]Department, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -137,7 +142,7 @@ func (s *memoryStore) ListDepartments() []Department {
 		out = append(out, *dept)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
+	return out, nil
 }
 
 func (s *memoryStore) RegisterPerson(name, id string, t PersonType, departmentID string) (*Person, error) {
@@ -165,28 +170,28 @@ func (s *memoryStore) RegisterPerson(name, id string, t PersonType, departmentID
 	return person, nil
 }
 
-func (s *memoryStore) GetPerson(id string) (*Person, bool) {
+func (s *memoryStore) GetPerson(id string) (*Person, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	person, ok := s.persons[id]
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 	copied := *person
-	return &copied, true
+	return &copied, true, nil
 }
 
-func (s *memoryStore) GetPersonByEmployeeNo(employeeNo string) (*Person, bool) {
+func (s *memoryStore) GetPersonByEmployeeNo(employeeNo string) (*Person, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	person, ok := s.employeeNos[employeeNo]
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 	copied := *person
-	return &copied, true
+	return &copied, true, nil
 }
 
 // numericSuffix parses the numeric part of a generated id (D0007 -> 7). It
@@ -267,7 +272,7 @@ func (s *memoryStore) load(state storeFile) {
 
 // ListPersons returns the members of a department. An empty departmentID
 // returns every registered person.
-func (s *memoryStore) ListPersons(departmentID string) []Person {
+func (s *memoryStore) ListPersons(departmentID string) ([]Person, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -279,5 +284,5 @@ func (s *memoryStore) ListPersons(departmentID string) []Person {
 		out = append(out, *person)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].EmployeeNo < out[j].EmployeeNo })
-	return out
+	return out, nil
 }

@@ -50,7 +50,11 @@ func TestCreateDepartmentAcceptsAllTypes(t *testing.T) {
 			t.Errorf("case %d: department id must be assigned", i)
 		}
 	}
-	if got := len(svc.ListDepartments()); got != len(cases) {
+	departments, err := svc.ListDepartments()
+	if err != nil {
+		t.Fatalf("ListDepartments: %v", err)
+	}
+	if got := len(departments); got != len(cases) {
 		t.Fatalf("ListDepartments() = %d departments, want %d", got, len(cases))
 	}
 }
@@ -339,7 +343,10 @@ func TestRenameDepartmentKeepsMembersAndViews(t *testing.T) {
 	}
 
 	// The department list reflects the new name under the same id.
-	departments := svc.ListDepartments()
+	departments, err := svc.ListDepartments()
+	if err != nil {
+		t.Fatalf("ListDepartments: %v", err)
+	}
 	if len(departments) != 1 || departments[0].Name != "平台研发部" {
 		t.Errorf("ListDepartments() = %+v, want one department named 平台研发部", departments)
 	}
