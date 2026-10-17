@@ -95,8 +95,18 @@ func New(svc *org.Service, logger *slog.Logger, opts ...Option) http.Handler {
 // @Tags     system
 // @Produce  json
 // @Success  200  {object}  healthResponse
+// @Failure  503  {object}  healthResponse  "数据库不可达"
 // @Router   /health [get]
-func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.Ping(r.Context()); err != nil {
+		h.log.Error("health_database_unavailable", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, healthResponse{
+			Status:  "unavailable",
+			Service: serviceName,
+			Version: h.version,
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, healthResponse{
 		Status:  "ok",
 		Service: serviceName,
@@ -146,10 +156,16 @@ func (h *Handler) healthz(w http.ResponseWriter, r *http.Request) {
 // @Tags     departments
 // @Produce  json
 // @Success  200  {object}  departmentListResponse
+// @Failure  500  {object}  errorResponse  "存储读取失败"
 // @Router   /api/v1/departments [get]
 func (h *Handler) listDepartments(w http.ResponseWriter, _ *http.Request) {
+	items, err := h.svc.ListDepartments()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, departmentListResponse{
-		Items: h.svc.ListDepartments(),
+		Items: items,
 		Types: org.DepartmentTypeNames(),
 	})
 }

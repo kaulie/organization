@@ -12,7 +12,7 @@
 #   bin/orgd                可执行文件（来自发版包）
 #   scripts/*.sh            本目录（来自发版包）
 #   backend/.env            可选项覆盖（首次启动自动生成，权限 600）
-#   backend/data/           数据目录（org-store.json 持久化于此，跨发布保留）
+#   backend/data/           数据目录（历史 org-store.json；首次连上 PostgreSQL 时导入，跨发布保留）
 #   backend/runtime.pid     进程号
 #   backend/server.log      标准输出/错误
 set -euo pipefail
@@ -45,15 +45,24 @@ if [ ! -f "${ENV_FILE}" ]; then
 # organization 运行期配置（首次启动自动生成，权限 600，请勿提交到 git）
 # 监听地址由 start.sh 按平台端口推导（127.0.0.1:PORT），如需换网卡再打开下面一行：
 # ORG_BIND=127.0.0.1
-# 数据目录（持久化 JSON 文件 org-store.json 所在目录；发布时该目录会被保留）：
+# 数据目录（历史 JSON 快照 org-store.json；发布时该目录会被保留）：
 # ORG_DATA_DIR=${DATA_DIR}
+# PostgreSQL 连接串由部署平台 runtimeEnv 注入 ORG_DATABASE_URL，不要把口令写进仓库。
+# 未设置时服务退回 JSON 文件存储。
 EOF
   chmod 600 "${ENV_FILE}"
   log "已生成 ${ENV_FILE}"
 fi
 
+# 平台 runtimeEnv 里的 ORG_DATABASE_URL 优先于 backend/.env，避免一份旧的空值把
+# 部署切回 JSON 文件。
+PLATFORM_DATABASE_URL="${ORG_DATABASE_URL:-}"
+
 # shellcheck disable=SC1090
 set -a; . "${ENV_FILE}"; set +a
+if [ -n "${PLATFORM_DATABASE_URL}" ]; then
+  export ORG_DATABASE_URL="${PLATFORM_DATABASE_URL}"
+fi
 
 # 平台注入的值优先：端口永远跟随服务契约的 healthUrl。
 # 服务自身读 SERVICE_PORT（刻意不用通用名 PORT：同主机其它运行时会导出 PORT，
