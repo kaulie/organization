@@ -102,8 +102,14 @@ http://localhost:8080/          # 单页界面
 | `APP_VERSION` | `dev` | 版本号，出现在 `/health` 响应与启动/关闭日志中；发版时由平台注入，二进制内以 `-ldflags` 兜底 |
 | `ORG_DATA_DIR` | `backend/data` | JSON 快照目录（`<ORG_DATA_DIR>/org-store.json`）。没设 `ORG_DATABASE_URL` 时它就是存储；设了之后它只作为空库的一次性导入来源。部署时 `scripts/start.sh` 注入 `…/backend/data`，该目录跨发布保留 |
 | `ORG_DATABASE_URL` | 空 | PostgreSQL 连接串。部署由平台 `runtimeEnv` 注入，指向 `49.234.45.173:5432/organization`（`sslmode=require`）。口令不进仓库。未设置时使用 JSON 文件 |
+| `REGISTRY_URL` | `http://127.0.0.1:4240` | 服务中心。`Listen` 成功后、开始接请求之前 `PUT .../announce` 上报本进程地址；失败则进程退出 |
+| `REGISTRY_NS` | `default` | 上报用的命名空间，须与已登记契约一致 |
+| `SERVICE_NAME` | `organization` | 上报用的服务名，即部署平台的 `serviceId` |
+| `REGISTRY_TOKEN` | 空 | 写接口收紧后的 `Authorization: Bearer` 令牌。当前写接口开放时不需要 |
 
 优先级：**`ORG_ADDR` > `SERVICE_PORT` > 内置默认 `8080`**。
+
+进程只在启动时上报一次，退出时按响应里的 `instance.id` 摘掉这条地址。这不是心跳：注册中心没有 TTL。`darwin` 会上报成 `mac`。监听在具体网卡（部署时是 `127.0.0.1`）时带上 `host`；监听 `0.0.0.0` / `::` 时省略 `host`，由注册中心记下这次连接的对端地址。规范见 [service-registry docs/register.md](https://github.com/kaulie/service-registry/blob/main/docs/register.md)。
 
 ```bash
 SERVICE_PORT=9000 go run ./cmd/server                  # 监听 :9000（所有网卡）
@@ -211,8 +217,8 @@ internal/httpapi/handler.go 每个 handler 一段注解
 | CI | `.github/workflows/register-contract.yml` | 需 **self-hosted runner**（能直连服务中心）；默认只手工触发，runner 就绪后打开 `push: branches: [main]` |
 | 手工 / 补登记 | `make register` 或 `bash scripts/register-contract.sh` | 幂等，随时可跑 |
 
-登记是**幂等**的：规范原文的 sha256 与库里一致时跳过 PUT（不刷 revision，不产生无意义的变更记录），
-实例集合按声明式整组对齐，重复跑无副作用。
+登记是**幂等**的：规范原文的 sha256 与库里一致时跳过 PUT（不刷 revision，不产生无意义的变更记录）。
+这一步**默认不改实例**。监听地址由进程在 `Listen` 成功后自己 `PUT .../announce`；`register.sh` 在没有 `--instance` 时会跳过实例同步。只有显式设置 `INSTANCES` 才做声明式整组对齐，列表里没有的地址会被删掉，所以进程已经上报之后不要再用一份不含那条地址的列表去同步。
 
 ### 参数（都可用环境变量覆盖）
 
@@ -220,7 +226,7 @@ internal/httpapi/handler.go 每个 handler 一段注解
 | --- | --- | --- |
 | `SERVICE_NAME` | `organization` | 注册用的服务名 |
 | `DEPARTMENT_ID` | `D0006` | 归属部门（IT组织部）。查目录：`curl http://127.0.0.1:4240/v1/departments` |
-| `INSTANCES` | `127.0.0.1:4244` | 实例地址，逗号分隔；端口即本服务在部署平台的契约端口 |
+| `INSTANCES` | 空 | 默认不传。空则不碰实例（地址由进程启动时上报）。显式设置后按逗号分隔做声明式整组对齐，列表外的地址会被删掉 |
 | `REGISTRY_URL` | `http://127.0.0.1:4240` | 服务中心地址（只绑本机回环） |
 | `REGISTRY_NS` / `REGISTRY_TOKEN` | `default` / 空 | 命名空间与写令牌（写接口收紧后才需要，走密钥管理，别写进仓库） |
 | `VERSION` | `$APP_VERSION` 或 `git describe` | 上报的版本号；发版时即本次部署的 8 位短 hash。**只在契约真的变化时才会写进库里**：`register.sh` 比对规范原文 sha256 一致就跳过整个 PUT（避免把变更表刷成噪声），所以纯代码重构不会改动注册中心里的 `version` |
@@ -250,6 +256,7 @@ build.sh            发版构建（产出 outputs/，供部署平台 release.sh 
 scripts/            标准启停脚本（start/stop/restart，见“部署与启停”）+ register-contract.sh（契约登记）
 .github/workflows/  CI（register-contract.yml：注解 → OpenAPI → 登记，需 self-hosted runner）
 cmd/server          HTTP 服务入口（配置、优雅退出）+ swag General API Info（注解入口）
+internal/registry   启动后向服务中心 announce 本进程地址，退出时按 instance.id 摘掉
 internal/httpapi    传输层：路由、JSON 编解码、错误到 HTTP 状态码的映射、契约响应类型与注解
 internal/httpapi/webui  内置单页界面（go:embed，经 /ui/* 提供静态资源）
 internal/org        领域层：模型与校验、业务用例 Service、存储 Store（内存、JSON 文件、PostgreSQL）
@@ -317,8 +324,9 @@ scripts/register-contract.sh  注解 → OpenAPI → 登记服务中心（发版
 `start.sh` 的行为：缺失二进制直接报错退出；首次启动生成 `backend/.env`；
 已在运行则跳过（幂等）；`nohup` 拉起后写 `backend/runtime.pid`；轮询
 `http://127.0.0.1:${SERVICE_PORT}/health` 最多 20s，成功才返回 0，失败则打印日志尾部、
-清理 pid 文件并返回 1。`stop.sh` 在未运行时返回 0（幂等），确保 `deploy.sh`
-的重启链路不会因为空跑而失败。
+清理 pid 文件并返回 1。进程在开始接请求之前会向服务中心上报监听地址，上报失败
+则进程退出，探活随之失败。`stop.sh` 发 SIGTERM 后进程先摘掉自己的实例再关闭
+HTTP；`stop.sh` 在未运行时返回 0（幂等），确保 `deploy.sh` 的重启链路不会因为空跑而失败。
 
 手动运行（默认端口 `4250`）：
 
@@ -365,9 +373,7 @@ make register             # 注解 → OpenAPI → 登记到服务中心（幂�
 
 覆盖：部门创建（4 种类型 + 别名、校验、重名冲突）、部门重命名（保留 ID/类型/成员、名称索引重建、重名冲突、幂等自改、校验与不存在）、人员注册（工号分配、类型校验、部门存在性、ID 冲突）、部门详情含成员列表、人员查询（按 ID / 按工号）、列表按部门过滤、HTTP 全链路与错误状态码映射、数据文件持久化（跨重启恢复部门/人员/ID 序列、父目录自动创建、空文件视为空库、损坏或高版本文件拒绝启动、写盘失败回滚内存并返回 500）、`ORG_DATA_DIR` 解析、**契约一致性**（`internal/httpapi/contract_test.go` 逐条比对 `@Router` 注解与路由表：注解与路由任何一边多了/少了都失败；`cmd/server` 断言 General API Info 仍在 `package main` 之前的注解块里）。
 
-契约链路实测：`make contract-swagger` 从注解生成 6 个路径 / 9 个操作（含 `/health`、`/healthz`、`/api/v1/{departments,persons}` 的 7 个业务操作与全部请求/响应定义）；`make register` 上报后服务中心显示
-`organization · D0006 IT组织部 · 9 个端点 · 实例 127.0.0.1:4244`，重复执行输出
-「契约无变化…跳过登记」且不产生新的 revision（幂等）。`build.sh` 末尾的登记钩子同样实测通过（发版流程里自动刷新契约）。
+契约链路：`make contract-swagger` 从注解生成 6 个路径 / 9 个操作（含 `/health`、`/healthz`、`/api/v1/{departments,persons}` 的 7 个业务操作与全部请求/响应定义）。`make register` 只刷新契约，不改实例集合；重复执行在规范没变时输出「契约无变化…跳过登记」且不产生新的 revision。监听地址由进程启动时 `announce`，退出时按 `instance.id` 删除。`build.sh` 末尾同样只登记契约。
 
 `examples/demo.sh` 第 7 步会**真实重启进程**（SIGTERM 停 → 重新拉起）并打印重启后的部门与人员，可直接复现「发布后数据不应该为空」。
 

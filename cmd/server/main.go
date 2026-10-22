@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/kaulie/organization/internal/httpapi"
 	"github.com/kaulie/organization/internal/org"
+	"github.com/kaulie/organization/internal/registry"
 )
 
 // version is the build version. The release build injects the deployment hash
@@ -160,6 +162,46 @@ func main() {
 		"persons", len(persons),
 	)
 
+	// Listen first, announce this address, and only then accept requests.
+	// Registration failure closes the socket and aborts startup so the process
+	// is not left running with no catalog entry. One PUT .../announce, not a
+	// heartbeat and not a declarative instance sync. See service-registry
+	// docs/register.md.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		logger.Error("server_listen_failed", "addr", addr, "err", err)
+		os.Exit(1)
+	}
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok || tcpAddr.Port < 1 {
+		_ = ln.Close()
+		logger.Error("server_listen_failed", "addr", ln.Addr().String(), "err", "cannot parse listen port")
+		os.Exit(1)
+	}
+	reg := registry.FromEnv()
+	announceCtx, announceCancel := context.WithTimeout(context.Background(), registry.AnnounceTimeout)
+	announced, err := reg.Announce(announceCtx, tcpAddr.Port, registry.HostForAnnounce(tcpAddr.IP))
+	announceCancel()
+	if err != nil {
+		_ = ln.Close()
+		logger.Error("instance_announce_failed",
+			"registry", reg.BaseURL,
+			"namespace", reg.Namespace,
+			"service", reg.Service,
+			"port", tcpAddr.Port,
+			"err", err,
+		)
+		os.Exit(1)
+	}
+	logger.Info("instance_announced",
+		"id", announced.ID,
+		"created", announced.Created,
+		"namespace", reg.Namespace,
+		"service", reg.Service,
+		"host", announced.Host,
+		"port", announced.Port,
+	)
+
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           httpapi.New(service, logger, httpapi.WithVersion(appVersion)),
@@ -173,8 +215,8 @@ func main() {
 	defer stop()
 
 	go func() {
-		logger.Info("server_starting", "addr", addr, "version", appVersion)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Info("server_starting", "addr", ln.Addr().String(), "version", appVersion)
+		if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("server_error", "err", err)
 			stop()
 		}
@@ -182,6 +224,16 @@ func main() {
 
 	<-ctx.Done()
 	logger.Info("server_shutting_down", "version", appVersion)
+
+	// Drop this address before draining. A failed delete is logged only:
+	// shutdown still proceeds, and the address stays until a later announce.
+	dropCtx, dropCancel := context.WithTimeout(context.Background(), registry.DeregisterTimeout)
+	if err := reg.Deregister(dropCtx, announced.ID); err != nil {
+		logger.Error("instance_deregister_failed", "id", announced.ID, "err", err)
+	} else {
+		logger.Info("instance_deregistered", "id", announced.ID)
+	}
+	dropCancel()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

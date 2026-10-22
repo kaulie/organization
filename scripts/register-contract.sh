@@ -16,13 +16,14 @@
 # 用法：
 #   scripts/register-contract.sh                       # 发版 / CI / 本机都能跑，幂等
 #   VERSION=1.2.3 scripts/register-contract.sh         # 指定版本（默认取 APP_VERSION 或 git describe）
-#   INSTANCES=127.0.0.1:4244,10.0.0.9:4244 scripts/register-contract.sh   # 多实例
+#   INSTANCES=127.0.0.1:4244,10.0.0.9:4244 scripts/register-contract.sh   # 显式整组同步（会删掉列表外的地址）
 #   REGISTRY_CLIENT_CI=/path/to/register-go-service.sh scripts/register-contract.sh
 #
 # 环境变量（★ 可覆盖默认值）：
 #   ★ SERVICE_NAME 服务名（默认 organization）
 #   ★ DEPARTMENT_ID 归属部门（默认 D0006 IT组织部；可用 `curl $REGISTRY_URL/v1/departments` 查）
-#   ★ INSTANCES     实例地址，逗号分隔（默认 127.0.0.1:4244 —— 本服务在部署平台的端口）
+#   ★ INSTANCES     默认空：不碰实例。监听地址由进程在 Listen 成功后自己 announce。
+#                   显式设置才会声明式整组对齐，列表里没有的地址会被删掉。
 #   ★ REGISTRY_URL  注册中心地址（默认 http://127.0.0.1:4240，只绑本机）
 #   ★ REGISTRY_NS   命名空间（默认 default）；REGISTRY_TOKEN 写令牌（写接口收紧后才需要）
 #   ★ VERSION / OWNER / HEALTH_PATH / TAGS / GIT_REPO / SWAG_MAIN / SWAG_ARGS
@@ -39,7 +40,9 @@ die() { echo "[register-contract][错误] $*" >&2; exit 1; }
 
 SERVICE_NAME="${SERVICE_NAME:-organization}"
 DEPARTMENT_ID="${DEPARTMENT_ID:-D0006}"
-INSTANCES="${INSTANCES:-127.0.0.1:4244}"
+# 空字符串表示「不传 --instance」。register.sh 在这种情况下跳过实例同步，
+# 不会把进程启动后 announce 上去的地址摘掉。
+INSTANCES="${INSTANCES:-}"
 REGISTRY_URL="${REGISTRY_URL:-http://127.0.0.1:4240}"
 REGISTRY_NS="${REGISTRY_NS:-default}"
 OWNER="${OWNER:-kaulie}"
@@ -102,7 +105,7 @@ if ! CLIENT_CI="$(find_client_ci)"; then
 fi
 log "使用服务中心脚本：${CLIENT_CI}"
 
-log "登记 ${SERVICE_NAME}：部门=${DEPARTMENT_ID} 实例=${INSTANCES} 版本=${VERSION} → ${REGISTRY_URL}"
+log "登记 ${SERVICE_NAME}：部门=${DEPARTMENT_ID} 实例=${INSTANCES:-（不改，由进程启动时上报）} 版本=${VERSION} → ${REGISTRY_URL}"
 # 环境变量一路透传给 register-go-service.sh：swag init（读注解）→ register.sh（幂等上报）。
 SERVICE_NAME="${SERVICE_NAME}" \
 DEPARTMENT_ID="${DEPARTMENT_ID}" \
