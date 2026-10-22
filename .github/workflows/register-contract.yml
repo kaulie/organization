@@ -32,12 +32,12 @@ jobs:
       - name: 取服务中心的登记脚本
         run: git clone --depth 1 https://github.com/kaulie/service-registry /tmp/service-registry
 
-      - name: 登记契约 + 实例
+      - name: 登记契约
         env:
           SERVICE_REGISTRY_DIR: /tmp/service-registry
           SERVICE_NAME: organization
           DEPARTMENT_ID: D0006 # IT组织部，见 `curl $REGISTRY_URL/v1/departments`
-          INSTANCES: 127.0.0.1:4244
+          # 不传 INSTANCES：监听地址由进程启动后 announce，避免声明式同步摘掉线上地址。
           REGISTRY_URL: http://127.0.0.1:4240
           REGISTRY_NS: default
           REGISTRY_TOKEN: ${{ secrets.REGISTRY_NS_TOKEN }} # 写接口收紧后才需要

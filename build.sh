@@ -56,9 +56,10 @@ done
 if [ "${SKIP_REGISTER_CONTRACT:-0}" = "1" ]; then
   log "跳过契约登记（SKIP_REGISTER_CONTRACT=1）"
 else
-  log "登记服务契约到服务中心（注解 → OpenAPI）"
-  if ! INSTANCES="${INSTANCES:-127.0.0.1:4244}" VERSION="${APP_VERSION}" \
-       bash scripts/register-contract.sh; then
+  # 只登记契约。监听地址由进程 Listen 成功后 announce，这里不传 INSTANCES，
+  # 避免声明式整组同步把进程刚报上的地址摘掉。
+  log "登记服务契约到服务中心（注解 → OpenAPI；实例由进程启动时上报）"
+  if ! VERSION="${APP_VERSION}" bash scripts/register-contract.sh; then
     [ "${REGISTER_CONTRACT_STRICT:-0}" = "1" ] && die "契约登记失败（REGISTER_CONTRACT_STRICT=1）"
     log "警告：契约登记失败（服务中心可能不可达）；发版继续，可事后补跑 scripts/register-contract.sh"
   fi
